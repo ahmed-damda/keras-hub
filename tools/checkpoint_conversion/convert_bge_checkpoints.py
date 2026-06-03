@@ -12,9 +12,12 @@ Usage:
 
 import json
 import os
+
 import keras
 import numpy as np
 import requests
+import torch
+import torch.nn.functional as F
 import transformers
 from absl import app
 from absl import flags
@@ -118,9 +121,7 @@ def convert_checkpoints(keras_hub_model, hf_model):
     keras_hub_model.get_layer("token_embedding").embeddings.assign(
         hf_wts["embeddings.word_embeddings.weight"].numpy()
     )
-    keras_hub_model.get_layer(
-        "position_embedding"
-    ).position_embeddings.assign(
+    keras_hub_model.get_layer("position_embedding").position_embeddings.assign(
         hf_wts["embeddings.position_embeddings.weight"].numpy()
     )
     keras_hub_model.get_layer("segment_embedding").embeddings.assign(
@@ -198,9 +199,7 @@ def convert_checkpoints(keras_hub_model, hf_model):
         keras_hub_model.get_layer(
             f"transformer_layer_{i}"
         )._self_attention_layer._output_dense.bias.assign(
-            hf_wts[
-                f"encoder.layer.{i}.attention.output.dense.bias"
-            ].numpy()
+            hf_wts[f"encoder.layer.{i}.attention.output.dense.bias"].numpy()
         )
 
         # --- Self-attention layer norm ---
@@ -214,18 +213,14 @@ def convert_checkpoints(keras_hub_model, hf_model):
         keras_hub_model.get_layer(
             f"transformer_layer_{i}"
         )._self_attention_layer_norm.beta.assign(
-            hf_wts[
-                f"encoder.layer.{i}.attention.output.LayerNorm.bias"
-            ].numpy()
+            hf_wts[f"encoder.layer.{i}.attention.output.LayerNorm.bias"].numpy()
         )
 
         # --- FFN: intermediate (up-projection) ---
         keras_hub_model.get_layer(
             f"transformer_layer_{i}"
         )._feedforward_intermediate_dense.kernel.assign(
-            hf_wts[f"encoder.layer.{i}.intermediate.dense.weight"]
-            .numpy()
-            .T
+            hf_wts[f"encoder.layer.{i}.intermediate.dense.weight"].numpy().T
         )
         keras_hub_model.get_layer(
             f"transformer_layer_{i}"
@@ -276,8 +271,6 @@ def validate_output(
     hf_tokenizer,
 ):
     """Cross-framework numerical validation (atol=1e-4)."""
-    import torch
-    import torch.nn.functional as F
 
     print("\n-> Validate outputs numerically.")
     test_sentence = "I love machine learning and nlp"
@@ -293,9 +286,7 @@ def validate_output(
     with torch.no_grad():
         hf_outputs = hf_model(**hf_inputs)
     hf_cls = hf_outputs.last_hidden_state[:, 0, :].numpy()
-    hf_emb = F.normalize(
-        torch.tensor(hf_cls), p=2, dim=1
-    ).numpy()
+    hf_emb = F.normalize(torch.tensor(hf_cls), p=2, dim=1).numpy()
 
     # KerasHub.
     preprocessor = keras_hub.models.BgeTextEmbedderPreprocessor(
@@ -304,10 +295,9 @@ def validate_output(
     kh_inputs = preprocessor([test_sentence])
     kh_outputs = keras_hub_model(kh_inputs)
     kh_cls = kh_outputs["sequence_output"][:, 0, :].numpy()
-    kh_emb = (
-        keras.ops.normalize(keras.ops.convert_to_tensor(kh_cls), axis=-1)
-        .numpy()
-    )
+    kh_emb = keras.ops.normalize(
+        keras.ops.convert_to_tensor(kh_cls), axis=-1
+    ).numpy()
 
     print(f"  HF embedding (first 5 dims):  {hf_emb[0, :5]}")
     print(f"  KerasHub embedding (first 5):  {kh_emb[0, :5]}")
@@ -321,10 +311,6 @@ def validate_output(
             "  WARNING: Outputs differ beyond tolerance. "
             "Inspect weight assignment and activation function."
         )
-
-    # Also validate that cosine similarity between same-sentence embeddings=1.
-    cos_sim = float(np.dot(kh_emb[0], kh_emb[0]))
-    print(f"  Self-cosine similarity (should be ~1.0): {cos_sim:.6f}")
 
 
 def main(_):
@@ -365,7 +351,6 @@ def main(_):
     )
 
     # Run a dummy forward pass to build all weights.
-    import keras
     dummy = {
         "token_ids": keras.ops.ones((1, 8), dtype="int32"),
         "segment_ids": keras.ops.zeros((1, 8), dtype="int32"),
@@ -374,8 +359,7 @@ def main(_):
     keras_hub_backbone(dummy)
 
     print(
-        f"\n  KerasHub parameter count: "
-        f"{keras_hub_backbone.count_params():,}"
+        f"\n  KerasHub parameter count: {keras_hub_backbone.count_params():,}"
     )
 
     # 5. Convert weights.

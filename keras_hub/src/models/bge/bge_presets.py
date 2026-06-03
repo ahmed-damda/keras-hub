@@ -8,7 +8,7 @@ backbone_presets = {
                 "Fine-tuned for English sentence embeddings and retrieval. "
                 "Trained by BAAI."
             ),
-            "params": 33360000,
+            "params": 33391104,
             "path": "bge",
         },
         "kaggle_handle": "kaggle://keras/bge/keras/bge_small_en_v1.5/1",

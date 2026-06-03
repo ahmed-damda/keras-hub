@@ -45,7 +45,9 @@ class BgeTokenizerTest(TestCase):
             preset="bge_small_en_v1.5",
             input_data=["I love machine learning and nlp"],
             # [CLS] i love machine learning and nl ##p [SEP]
-            expected_output=[[101, 1045, 2293, 3698, 4083, 1998, 17953, 2361, 102]],
+            expected_output=[
+                [101, 1045, 2293, 3698, 4083, 1998, 17953, 2361, 102]
+            ],
         )
 
     @pytest.mark.extra_large

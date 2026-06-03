@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 
-from keras_hub.src.models.bge.bge_backbone import BgeBackbone
 from keras_hub.src.models.bge.bge_text_embedder_preprocessor import (
     BgeTextEmbedderPreprocessor,
 )
@@ -56,3 +55,12 @@ class BgeTextEmbedderPreprocessorTest(TestCase):
             preset="bge_small_en_v1.5",
             input_data=["I love machine learning and nlp"],
         )
+
+    @pytest.mark.extra_large
+    def test_all_presets(self):
+        for preset in BgeTextEmbedderPreprocessor.presets:
+            self.run_preset_test(
+                cls=BgeTextEmbedderPreprocessor,
+                preset=preset,
+                input_data=["The quick brown fox."],
+            )

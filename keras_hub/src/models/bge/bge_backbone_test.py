@@ -57,10 +57,26 @@ class BgeBackboneTest(TestCase):
                 "sequence_output": (1, 6, 384),
                 "pooled_output": (1, 384),
             },
-            # Fill expected_partial_output after checkpoint conversion:
-            # expected_partial_output={
-            #     "sequence_output": ops.array([...]),
-            # },
+            expected_partial_output={
+                "sequence_output": ops.array(
+                    [
+                        -0.24263829,
+                        -0.25523514,
+                        0.04677887,
+                        -0.29345095,
+                        0.48614883,
+                    ]
+                ),
+                "pooled_output": ops.array(
+                    [
+                        -0.04671879,
+                        0.15290071,
+                        -0.04332585,
+                        0.00902156,
+                        -0.13474296,
+                    ]
+                ),
+            },
         )
 
     @pytest.mark.extra_large

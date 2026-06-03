@@ -23,12 +23,12 @@ class BgeTextEmbedder(Task):
     `predict()` and `evaluate()`. This is done by default when creating the
     model with `from_preset()`.
 
-    **Usage note:** Cosine similarity between embeddings can be computed as
+    Usage note: Cosine similarity between embeddings can be computed as
     a plain dot product after this model's output, because embeddings are
     already L2-normalized. For retrieval, encode queries and passages
     separately, then compute `query_emb @ passage_emb.T`.
 
-    **Query instruction:** For retrieval tasks, BGE recommends prepending the
+    Query instruction: For retrieval tasks, BGE recommends prepending the
     instruction `"Represent this sentence for searching relevant passages: "`
     to query strings (not to passages). This is optional for similarity tasks.
 
@@ -62,7 +62,9 @@ class BgeTextEmbedder(Task):
     ```python
     embedder = keras_hub.models.BgeTextEmbedder.from_preset("bge_small_en_v1.5")
 
-    query_instruction = "Represent this sentence for searching relevant passages: "
+    query_instruction = (
+        "Represent this sentence for searching relevant passages:"
+    )
     queries = [query_instruction + "What is BGE?"]
     passages = ["BGE is a text embedding model by BAAI."]
 
@@ -158,4 +160,6 @@ class BgeTextEmbedder(Task):
             loss = None
         if metrics == "auto":
             metrics = None
-        super().compile(optimizer=optimizer, loss=loss, metrics=metrics, **kwargs)
+        super().compile(
+            optimizer=optimizer, loss=loss, metrics=metrics, **kwargs
+        )

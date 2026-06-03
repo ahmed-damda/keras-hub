@@ -56,7 +56,8 @@ class BgeTextEmbedderTest(TestCase):
         self.assertAllClose(norms, ops.ones_like(norms), atol=1e-5)
 
     def test_without_preprocessor(self):
-        """Model must accept pre-tokenized dict inputs when preprocessor=None."""
+        """Model must accept pre-tokenized dict inputs
+        when preprocessor=None."""
         embedder = BgeTextEmbedder(
             backbone=self.backbone,
             preprocessor=None,
@@ -84,20 +85,36 @@ class BgeTextEmbedderTest(TestCase):
 
     @pytest.mark.extra_large
     def test_smallest_preset(self):
+        # Token IDs for: [CLS] i love machine learning and nl ##p [SEP]
         self.run_preset_test(
             cls=BgeTextEmbedder,
             preset="bge_small_en_v1.5",
-            input_data=["I love machine learning and nlp"],
+            input_data={
+                "token_ids": ops.array(
+                    [[101, 1045, 2293, 3698, 4083, 1998, 17953, 2361, 102]],
+                    dtype="int32",
+                ),
+                "segment_ids": ops.zeros((1, 9), dtype="int32"),
+                "padding_mask": ops.ones((1, 9), dtype="int32"),
+            },
             expected_output_shape=(1, 384),
-            # Fill after checkpoint conversion:
-            # expected_partial_output=ops.array([...]),
+            expected_partial_output=ops.array(
+                [-0.05340093, -0.02628993, 0.02447508, -0.02452144, 0.04503455]
+            ),
         )
 
     @pytest.mark.extra_large
     def test_all_presets(self):
+        input_data = {
+            "token_ids": ops.array(
+                [[101, 1045, 2293, 3698, 4083, 102]], dtype="int32"
+            ),
+            "segment_ids": ops.zeros((1, 6), dtype="int32"),
+            "padding_mask": ops.ones((1, 6), dtype="int32"),
+        }
         for preset in BgeTextEmbedder.presets:
             self.run_preset_test(
                 cls=BgeTextEmbedder,
                 preset=preset,
-                input_data=["The quick brown fox."],
+                input_data=input_data,
             )
