@@ -96,6 +96,21 @@ QUERY_DOC_PAIRS = (
     ],
 )
 
+# Each triplet: (anchor_EN, positive_other_lang, negative_other_lang).
+# sim(anchor, positive) must exceed sim(anchor, negative) to pass.
+CROSS_LINGUAL_TRIPLETS = [
+    (
+        "query: What is the capital of France?",
+        "query: Quelle est la capitale de la France?",  # FR — same meaning
+        "query: Quel temps fait-il aujourd'hui?",  # FR — different meaning
+    ),
+    (
+        "query: What is the capital of France?",
+        "query: 法国的首都是哪里？",  # ZH — same meaning
+        "query: 今天天气怎么样？",  # ZH — different meaning
+    ),
+]
+
 
 def _hf_mean_pool(outputs, attention_mask):
     """Mean-pool HuggingFace token embeddings weighted by attention mask."""
@@ -197,17 +212,28 @@ def validate_output(keras_embedder, hf_model_id):
     # CROSS-LINGUAL RANKING
     # =========================================
     print("\n--- Cross-lingual Ranking ---")
-    print("Sentences 0 and 1 (EN/FR, same meaning) should be more similar")
-    print("to each other than to sentence 2 (ZH, same meaning but different)")
-    keras_batch_sims = ops.convert_to_numpy(
-        keras_embedder.similarity(keras_embeddings, keras_embeddings)
-    )
-    hf_batch_sims = hf_embeddings @ hf_embeddings.T
-    # EN↔FR (0,1) should be > EN↔ZH (0,2) but all three are paraphrases so
-    # we just verify the matrix is symmetric and diagonal is 1.
-    keras_diag_ok = np.allclose(np.diag(keras_batch_sims), 1.0, atol=1e-5)
-    hf_diag_ok = np.allclose(np.diag(hf_batch_sims), 1.0, atol=1e-5)
-    print(f"Diagonal (self-sim) ≈ 1: KerasHub={keras_diag_ok}, HF={hf_diag_ok}")
+    print("sim(anchor, same-meaning in other lang) must exceed")
+    print("sim(anchor, different-meaning in other lang)")
+    lang_labels = ["EN↔FR", "EN↔ZH"]
+    cross_lingual_ok = True
+    for label, (anchor, positive, negative) in zip(
+        lang_labels, CROSS_LINGUAL_TRIPLETS
+    ):
+        embs = np.array(
+            keras_embedder.encode_text([anchor, positive, negative])
+        )
+        # similarity returns shape (1, 2): [anchor↔positive, anchor↔negative]
+        sims = ops.convert_to_numpy(
+            keras_embedder.similarity(embs[0:1], embs[1:])
+        )
+        sim_pos, sim_neg = float(sims[0, 0]), float(sims[0, 1])
+        ok = sim_pos > sim_neg
+        cross_lingual_ok = cross_lingual_ok and ok
+        status = "✅" if ok else "❌"
+        print(
+            f"{label}: sim(same)={sim_pos:.4f} > sim(diff)={sim_neg:.4f} "
+            f"{status}"
+        )
 
     # =========================================
     # SEMANTIC SEARCH RANKING
@@ -253,8 +279,11 @@ def validate_output(keras_embedder, hf_model_id):
         print("❌ FAILED: Embeddings are not unit-length")
         passed = False
 
-    if not keras_diag_ok:
-        print("❌ FAILED: Self-similarity is not ~1.0")
+    if not cross_lingual_ok:
+        print(
+            "❌ FAILED: Cross-lingual ranking — same-meaning pair scored "
+            "below unrelated pair"
+        )
         passed = False
 
     if not search_ok:
