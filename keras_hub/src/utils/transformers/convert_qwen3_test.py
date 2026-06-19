@@ -5,7 +5,7 @@ from keras_hub.src.models.qwen3.qwen3_backbone import Qwen3Backbone
 from keras_hub.src.tests.test_case import TestCase
 
 
-class TestQwen3EmbeddingConverter(TestCase):
+class TestQwen3Converter(TestCase):
     @pytest.mark.extra_large
     def test_backbone_from_hf_preset(self):
         model = Qwen3Backbone.from_preset("hf://microsoft/harrier-oss-v1-0.6b")

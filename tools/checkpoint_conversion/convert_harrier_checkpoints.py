@@ -1,21 +1,17 @@
-"""Convert and validate Qwen3-based text embedding checkpoints.
+"""Convert and validate Harrier text embedding checkpoints.
 
-This script handles HuggingFace checkpoints that declare
-``"architectures": ["Qwen3Model"]``, such as the Microsoft harrier-oss
-family.  Weight loading goes through
-``keras_hub.src.utils.transformers.convert_qwen3_embedding`` via the
-standard KerasHub ``from_preset("hf://...")`` path.
+This script handles HuggingFace checkpoints for Microsoft harrier-oss
+family.  Weight loading goes through 
+``keras_hub.src.utils.transformers.convert_qwen3``
+via the standard KerasHub ``from_preset("hf://...")`` path.
 
-Validation reproduces the reference embedding pipeline entirely from the
-``Qwen3Backbone`` without requiring the ``Qwen3TextEmbedder`` class (which
-lives on a separate PR):
-
-  token_ids/padding_mask → Qwen3Backbone → last-token pool → L2 norm
+Validation compares a ``Qwen3TextEmbedder`` (last-token pool + L2 norm)
+against the HF AutoModel reference.
 
 Usage::
 
-    python -m tools.checkpoint_conversion.convert_qwen3_embedding_checkpoints \
-        --preset harrier_oss_v1_0.6b_en
+    python -m tools.checkpoint_conversion.convert_harrier_checkpoints \
+        --preset harrier_embedding_oss_06b
 """
 
 import os
@@ -34,14 +30,13 @@ torch.manual_seed(123)
 device = torch.device("cpu")
 torch.set_default_device(device)
 
-from keras import ops  # noqa: E402
 from transformers import AutoModel  # noqa: E402
 from transformers import AutoTokenizer  # noqa: E402
 
 import keras_hub  # noqa: E402
 
 PRESET_MAP = {
-    "harrier_oss_v1_0.6b_en": "microsoft/harrier-oss-v1-0.6b",
+    "harrier_embedding_oss_06b": "microsoft/harrier-oss-v1-0.6b",
 }
 
 FLAGS = flags.FLAGS
@@ -52,81 +47,8 @@ flags.DEFINE_string(
     "upload_uri",
     None,
     "Kaggle URI to upload the preset to, e.g. "
-    '"kaggle://keras/qwen3/keras/harrier_oss_v1_0.6b_en". Optional.',
+    '"kaggle://keras/qwen3/keras/harrier_embedding_oss_06b". Optional.',
 )
-
-
-# =============================================================================
-# Embedding helpers (no Qwen3TextEmbedder dependency)
-# =============================================================================
-
-
-def _last_token_pool(sequence_output, padding_mask):
-    """Last non-padding token pooling.
-
-    Identical to ``Qwen3TextEmbedder._last_token_pooling`` so that the
-    backbone-only validation produces the same result as the full embedder.
-    """
-    mask = ops.cast(padding_mask, sequence_output.dtype)
-    mask_shifted = ops.pad(mask, [[0, 0], [0, 1]])[:, 1:]
-    last_token_mask = mask * (1.0 - mask_shifted)
-    return ops.sum(
-        sequence_output * ops.expand_dims(last_token_mask, axis=-1),
-        axis=1,
-    )
-
-
-def _l2_normalize(embeddings):
-    return ops.nn.normalize(embeddings, axis=-1, order=2)
-
-
-def _keras_embed(backbone, token_ids_np, padding_mask_np):
-    """Run backbone + pool + normalize and return a numpy array."""
-    inputs = {
-        "token_ids": token_ids_np,
-        "padding_mask": padding_mask_np,
-    }
-    seq_out = backbone(inputs)
-    pooled = _last_token_pool(seq_out, padding_mask_np)
-    normed = _l2_normalize(pooled)
-    return ops.convert_to_numpy(normed)
-
-
-def _build_inputs(texts, keras_tokenizer, sequence_length=256):
-    """Tokenize texts with the KerasHub tokenizer and build backbone inputs.
-
-    Appends ``end_token_id`` (<|im_end|>, 151645) to each sequence and pads
-    to ``sequence_length`` with ``pad_token_id`` (<|endoftext|>, 151643),
-    matching what ``Qwen3TextEmbedderPreprocessor`` produces.
-    """
-    eos_id = keras_tokenizer.end_token_id
-    pad_id = keras_tokenizer.pad_token_id
-
-    token_ids_batch = []
-    padding_mask_batch = []
-
-    for text in texts:
-        # Tokenize without any special tokens; KerasHub tokenizer returns
-        # a ragged/dense tensor of content token ids.
-        ids = (
-            ops.convert_to_numpy(keras_tokenizer(text))
-            .astype(np.int32)
-            .flatten()
-        )
-        # Truncate to leave room for EOS, then append it.
-        ids = ids[: sequence_length - 1]
-        ids = np.concatenate([ids, [eos_id]]).astype(np.int32)
-        content_len = len(ids)
-
-        padded_ids = np.full(sequence_length, pad_id, dtype=np.int32)
-        padded_mask = np.zeros(sequence_length, dtype=np.int32)
-        padded_ids[:content_len] = ids
-        padded_mask[:content_len] = 1
-
-        token_ids_batch.append(padded_ids)
-        padding_mask_batch.append(padded_mask)
-
-    return np.stack(token_ids_batch), np.stack(padding_mask_batch)
 
 
 # =============================================================================
@@ -139,7 +61,7 @@ def _hf_embed(texts, hf_tokenizer, hf_model):
 
     Processes one sequence at a time to avoid batch-padding effects.
     Uses ``add_special_tokens=False`` + explicit ``<|im_end|>`` append to
-    produce an identical token sequence to ``_build_inputs`` above.
+    produce an identical token sequence to ``Qwen3TextEmbedderPreprocessor``.
     """
     eos_id = hf_tokenizer.convert_tokens_to_ids("<|im_end|>")
     results = []
@@ -169,8 +91,8 @@ def _hf_embed(texts, hf_tokenizer, hf_model):
 # =============================================================================
 
 
-def validate_embedding_output(backbone, keras_tokenizer, hf_model_id):
-    """Validate backbone embedding parity against the HF AutoModel reference.
+def validate_output(embedder, hf_model_id):
+    """Validate Qwen3TextEmbedder parity against the HF AutoModel reference.
 
     Performs:
     1. Parameter count check.
@@ -180,7 +102,7 @@ def validate_embedding_output(backbone, keras_tokenizer, hf_model_id):
     5. Semantic search ranking consistency.
 
     Args:
-        backbone: Converted ``Qwen3Backbone`` instance.
+        embedder: Converted ``Qwen3TextEmbedder`` instance.
         hf_model_id: HuggingFace model ID string.
 
     Returns:
@@ -199,7 +121,7 @@ def validate_embedding_output(backbone, keras_tokenizer, hf_model_id):
     # PARAMETER COUNT
     # =========================================
     print("\n--- Parameter Count ---")
-    keras_params = backbone.count_params()
+    keras_params = embedder.count_params()
     hf_params = sum(p.numel() for p in hf_model.parameters())
     print(f"KerasHub params:    {keras_params:,}")
     print(f"HuggingFace params: {hf_params:,}")
@@ -225,9 +147,8 @@ def validate_embedding_output(backbone, keras_tokenizer, hf_model_id):
     print(f"HF shape: {hf_embeddings.shape}")
     print(f"HF[0][:5]: {hf_embeddings[0][:5]}")
 
-    print("\nComputing KerasHub embeddings (backbone + pool + norm)...")
-    token_ids, padding_mask = _build_inputs(test_texts, keras_tokenizer)
-    keras_embeddings = _keras_embed(backbone, token_ids, padding_mask)
+    print("\nComputing KerasHub embeddings (Qwen3TextEmbedder.predict)...")
+    keras_embeddings = np.array(embedder.predict(test_texts))
     print(f"KerasHub shape: {keras_embeddings.shape}")
     print(f"KerasHub[0][:5]: {keras_embeddings[0][:5]}")
 
@@ -269,11 +190,9 @@ def validate_embedding_output(backbone, keras_tokenizer, hf_model_id):
     print(f"Query: {query}")
     print(f"Documents: {documents}")
 
-    q_ids, q_mask = _build_inputs([query], keras_tokenizer)
-    d_ids, d_mask = _build_inputs(documents, keras_tokenizer)
-    keras_q = _keras_embed(backbone, q_ids, q_mask)
-    keras_d = _keras_embed(backbone, d_ids, d_mask)
-    keras_sims = keras_q @ keras_d.T
+    keras_q = np.array(embedder.encode_text(query))
+    keras_d = np.array(embedder.encode_documents(documents))
+    keras_sims = np.array(embedder.similarity(keras_q, keras_d))
     keras_best = int(np.argmax(keras_sims))
 
     hf_q = _hf_embed([query], hf_tokenizer, hf_model)
@@ -333,28 +252,19 @@ def main(_):
     preset = FLAGS.preset
     hf_preset = PRESET_MAP[preset]
 
-    # Load backbone via KerasHub's from_preset.  The preset_loader routes
-    # Qwen3Model-architecture checkpoints to convert_qwen3_embedding.py
-    # which handles the harrier weight-key prefix automatically.
-    print(f"\nLoading Qwen3Backbone from hf://{hf_preset} ...")
-    backbone = keras_hub.models.Qwen3Backbone.from_preset(f"hf://{hf_preset}")
-    keras_tokenizer = keras_hub.models.Qwen3Tokenizer.from_preset(
+    print(f"\nLoading Qwen3TextEmbedder from hf://{hf_preset} ...")
+    embedder = keras_hub.models.Qwen3TextEmbedder.from_preset(
         f"hf://{hf_preset}"
     )
+    print("\n-> Embedder loaded")
 
-    print("\n-> Backbone loaded")
-
-    passed = validate_embedding_output(backbone, keras_tokenizer, hf_preset)
+    passed = validate_output(embedder, hf_preset)
     if not passed:
         print("\n⚠️  Verification failed. Preset not saved.")
         return
 
-    # Save backbone preset.
-    # TODO: once the Qwen3TextEmbedder PR is merged, save a
-    # Qwen3TextEmbedder preset instead so the preprocessor and pooling
-    # configuration are included.
-    backbone.save_to_preset(f"./{preset}")
-    print(f"\n✅ Backbone preset saved to ./{preset}/")
+    embedder.save_to_preset(f"./{preset}")
+    print(f"\n✅ Embedder preset saved to ./{preset}/")
 
     upload_uri = FLAGS.upload_uri
     if upload_uri:

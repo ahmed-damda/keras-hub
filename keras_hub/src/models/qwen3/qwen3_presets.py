@@ -106,7 +106,7 @@ backbone_presets = {
         },
         "kaggle_handle": "kaggle://keras/qwen-3-embedding/keras/qwen3_embedding_8b_en/1",
     },
-    "harrier_oss_v1_0.6b_en": {
+    "harrier_embedding_oss_06b": {
         "metadata": {
             "description": (
                 "Microsoft harrier-oss-v1 0.6B multilingual text embedding "
@@ -117,6 +117,6 @@ backbone_presets = {
             "params": 596049920,
             "path": "qwen3",
         },
-        "kaggle_handle": "hf://microsoft/harrier-oss-v1-0.6b",
+        "kaggle_handle": "kaggle://keras/qwen-3-embedding/keras/harrier_oss_v1_0.6b_en/1",
     },
 }
