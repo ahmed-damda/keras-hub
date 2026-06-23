@@ -56,6 +56,10 @@ from keras_hub.src.utils.transformers.convert_bert import (
     convert_backbone_config,
 )
 from keras_hub.src.utils.transformers.convert_bert import convert_weights
+from keras_hub.src.utils.transformers.convert_bert import (
+    load_preprocessor_config,
+)
+from keras_hub.src.utils.transformers.convert_bert import load_task_config
 from keras_hub.src.utils.transformers.safetensor_utils import SafetensorLoader
 
 FLAGS = flags.FLAGS
@@ -77,9 +81,6 @@ PRESET_MAP = {
     "multilingual_e5_base": "intfloat/multilingual-e5-base",
     "multilingual_e5_large": "intfloat/multilingual-e5-large",
 }
-
-# multilingual-e5 standardizes on sequence_length=512.
-SEQUENCE_LENGTH = 512
 
 # Multilingual test sentences covering three language families.
 TEST_TEXTS = [
@@ -129,7 +130,6 @@ def _hf_encode(hf_model, hf_tokenizer, texts):
         texts,
         padding=True,
         truncation=True,
-        max_length=SEQUENCE_LENGTH,
         return_tensors="pt",
     )
     with torch.no_grad():
@@ -309,7 +309,6 @@ def main(_):
 
     print(f"\n{'=' * 60}")
     print(f"Converting: {hf_model_id} -> {preset}")
-    print("Pooling: mean token embeddings + L2 normalization")
     print(f"{'=' * 60}\n")
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -347,16 +346,31 @@ def main(_):
             proto=os.path.join(temp_dir, "sentencepiece.bpe.model")
         )
 
-        # Assemble BertTextEmbedder with E5 settings.
+        # Download sentence-transformer config files to derive pooling,
+        # normalization, and sequence length dynamically.
+        for fname in (
+            "modules.json",
+            "1_Pooling/config.json",
+            "sentence_bert_config.json",
+        ):
+            hf_hub_download(hf_model_id, fname, local_dir=temp_dir)
+
+        task_config = load_task_config(temp_dir, transformers_config)
+        preprocessor_config = load_preprocessor_config(
+            temp_dir, transformers_config
+        )
+        print(f"Task config: {task_config}")
+        print(f"Preprocessor config: {preprocessor_config}")
+
+        # Assemble BertTextEmbedder from config-derived settings.
         preprocessor = keras_hub.models.BertTextEmbedderPreprocessor(
             tokenizer=tokenizer,
-            sequence_length=SEQUENCE_LENGTH,
+            **preprocessor_config,
         )
         embedder = BertTextEmbedder(
             backbone=backbone,
             preprocessor=preprocessor,
-            pooling_mode="mean",
-            normalize=True,
+            **task_config,
         )
 
         # Validate.
