@@ -77,17 +77,6 @@ from keras_hub.src.models.bert.bert_text_embedder_preprocessor import (
 from keras_hub.src.models.bert.bert_tokenizer import (
     BertTokenizer as BertTokenizer,
 )
-from keras_hub.src.models.bge.bge_backbone import BgeBackbone as BgeBackbone
-from keras_hub.src.models.bge.bge_text_embedder import (
-    BgeTextEmbedder as BgeTextEmbedder,
-)
-from keras_hub.src.models.bge.bge_text_embedder_preprocessor import (
-    BgeTextEmbedderPreprocessor as BgeEmbedderPreprocessor,
-)
-from keras_hub.src.models.bge.bge_text_embedder_preprocessor import (
-    BgeTextEmbedderPreprocessor as BgeTextEmbedderPreprocessor,
-)
-from keras_hub.src.models.bge.bge_tokenizer import BgeTokenizer as BgeTokenizer
 from keras_hub.src.models.bloom.bloom_backbone import (
     BloomBackbone as BloomBackbone,
 )
@@ -929,6 +918,12 @@ from keras_hub.src.models.xlm_roberta.xlm_roberta_text_classifier_preprocessor i
 )
 from keras_hub.src.models.xlm_roberta.xlm_roberta_text_classifier_preprocessor import (
     XLMRobertaTextClassifierPreprocessor as XLMRobertaTextClassifierPreprocessor,
+)
+from keras_hub.src.models.xlm_roberta.xlm_roberta_text_embedder import (
+    XLMRobertaTextEmbedder as XLMRobertaTextEmbedder,
+)
+from keras_hub.src.models.xlm_roberta.xlm_roberta_text_embedder_preprocessor import (
+    XLMRobertaTextEmbedderPreprocessor as XLMRobertaTextEmbedderPreprocessor,
 )
 from keras_hub.src.models.xlm_roberta.xlm_roberta_tokenizer import (
     XLMRobertaTokenizer as XLMRobertaTokenizer,

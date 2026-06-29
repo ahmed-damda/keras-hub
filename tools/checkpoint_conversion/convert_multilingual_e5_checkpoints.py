@@ -1,19 +1,24 @@
 """
-Convert HuggingFace intfloat/multilingual-e5-* checkpoints to KerasHub format.
+Convert HuggingFace BAAI/bge-* and intfloat/multilingual-e5-* checkpoints to
+KerasHub format.
 
-Multilingual-E5 models are BERT encoders with an XLM-RoBERTa SentencePiece
-tokenizer, fine-tuned for multilingual dense retrieval using weakly-supervised
-contrastive pre-training. Embeddings are computed as mean-pooled token outputs
-followed by L2 normalization. This maps to:
+Three model families are supported:
 
-    BertTextEmbedder(
-        backbone=backbone,
-        preprocessor=preprocessor,
-        pooling_mode="mean",
-        normalize=True,
-    )
+**BGE English/Chinese models** (BAAI/bge-{small,base,large}-{en,zh}* and
+BAAI/llm-embedder) are BERT encoders using a WordPiece tokenizer and CLS
+token pooling followed by L2 normalization. They map to BertTextEmbedder.
 
-Usage convention: prefix queries with "query: " and documents with "passage: ".
+**Multilingual-E5 small** (intfloat/multilingual-e5-small) is also a BERT
+encoder but uses an XLM-RoBERTa SentencePiece tokenizer and mean pooling.
+It maps to BertTextEmbedder.
+
+**Multilingual-E5 base/large** (intfloat/multilingual-e5-{base,large}) and
+**BGE-M3** (BAAI/bge-m3) are pure XLM-RoBERTa encoders that map to
+XLMRobertaTextEmbedder. Multilingual-E5 uses mean pooling; BGE-M3 uses CLS
+pooling. All support 100+ languages.
+
+Usage convention for E5 models: prefix queries with "query: " and documents
+with "passage: ".
 
 Setup:
 ```shell
@@ -24,10 +29,29 @@ pip install keras-hub keras transformers safetensors huggingface_hub \
 Usage:
 ```shell
 cd tools/checkpoint_conversion
+# BGE (BERT-based)
+python convert_multilingual_e5_checkpoints.py --preset bge_small_en_v1.5
+python convert_multilingual_e5_checkpoints.py \\
+    --preset bge_small_en_v1.5 \\
+    --upload_uri kaggle://keras/bge/keras/bge_small_en_v1.5
+
+# BGE-M3 (XLM-RoBERTa-based)
+python convert_multilingual_e5_checkpoints.py --preset bge_m3
+python convert_multilingual_e5_checkpoints.py \\
+    --preset bge_m3 \\
+    --upload_uri kaggle://keras/bge/keras/bge_m3
+
+# Multilingual-E5 small (BERT-based)
 python convert_multilingual_e5_checkpoints.py --preset multilingual_e5_small
 python convert_multilingual_e5_checkpoints.py \\
     --preset multilingual_e5_small \\
     --upload_uri kaggle://keras/multilingual-e5/keras/multilingual_e5_small
+
+# Multilingual-E5 base/large (XLM-RoBERTa-based)
+python convert_multilingual_e5_checkpoints.py --preset multilingual_e5_base
+python convert_multilingual_e5_checkpoints.py \\
+    --preset multilingual_e5_large \\
+    --upload_uri kaggle://keras/multilingual-e5/keras/multilingual_e5_large
 ```
 """
 
@@ -49,17 +73,16 @@ from transformers import AutoTokenizer
 
 import keras_hub
 from keras_hub.src.models.bert.bert_text_embedder import BertTextEmbedder
-from keras_hub.src.models.xlm_roberta.xlm_roberta_tokenizer import (
-    XLMRobertaTokenizer,
+from keras_hub.src.models.xlm_roberta.xlm_roberta_text_embedder import (
+    XLMRobertaTextEmbedder,
 )
-from keras_hub.src.utils.transformers.convert_bert import (
-    convert_backbone_config,
+from keras_hub.src.models.xlm_roberta.xlm_roberta_text_embedder_preprocessor import (  # noqa: E501
+    XLMRobertaTextEmbedderPreprocessor,
 )
-from keras_hub.src.utils.transformers.convert_bert import convert_weights
-from keras_hub.src.utils.transformers.convert_bert import (
-    load_preprocessor_config,
+from keras_hub.src.utils.transformers import convert_bert as bert_converter
+from keras_hub.src.utils.transformers import (
+    convert_xlm_roberta as xlm_converter,
 )
-from keras_hub.src.utils.transformers.convert_bert import load_task_config
 from keras_hub.src.utils.transformers.safetensor_utils import SafetensorLoader
 
 FLAGS = flags.FLAGS
@@ -76,7 +99,54 @@ flags.DEFINE_string(
     '"kaggle://keras/multilingual-e5/keras/{preset}". Optional.',
 )
 
-PRESET_MAP = {"multilingual_e5_small": "intfloat/multilingual-e5-small"}
+PRESET_MAP = {
+    # BGE — English variants.
+    "bge_small_en": "BAAI/bge-small-en",
+    "bge_base_en": "BAAI/bge-base-en",
+    "bge_large_en": "BAAI/bge-large-en",
+    "bge_small_en_v1.5": "BAAI/bge-small-en-v1.5",
+    "bge_base_en_v1.5": "BAAI/bge-base-en-v1.5",
+    "bge_large_en_v1.5": "BAAI/bge-large-en-v1.5",
+    # BGE — Chinese variants.
+    "bge_small_zh": "BAAI/bge-small-zh",
+    "bge_base_zh": "BAAI/bge-base-zh",
+    "bge_large_zh": "BAAI/bge-large-zh",
+    "bge_small_zh_v1.5": "BAAI/bge-small-zh-v1.5",
+    "bge_base_zh_v1.5": "BAAI/bge-base-zh-v1.5",
+    "bge_large_zh_v1.5": "BAAI/bge-large-zh-v1.5",
+    # BGE — multilingual LLM embedder.
+    "llm_embedder": "BAAI/llm-embedder",
+    # Multilingual-E5 small (BERT + XLM-R tokenizer).
+    "multilingual_e5_small": "intfloat/multilingual-e5-small",
+    # Multilingual-E5 base/large (pure XLM-RoBERTa).
+    "multilingual_e5_base": "intfloat/multilingual-e5-base",
+    "multilingual_e5_large": "intfloat/multilingual-e5-large",
+    # BGE-M3 (pure XLM-RoBERTa, multilingual).
+    "bge_m3": "BAAI/bge-m3",
+}
+
+
+# Pure XLM-RoBERTa architecture presets (excludes multilingual_e5_small which
+# is BERT with an XLM-R tokenizer).
+_XLM_ROBERTA_PRESETS = frozenset(
+    {"bge_m3", "multilingual_e5_base", "multilingual_e5_large"}
+)
+
+
+def _is_xlm_roberta(preset):
+    """Return True for pure XLM-RoBERTa architecture presets."""
+    return preset in _XLM_ROBERTA_PRESETS
+
+
+def _use_mean_pool(preset):
+    """Return True for presets that use mean pooling (all ME5 variants)."""
+    return preset.startswith("multilingual_e5")
+
+
+def _is_multilingual(preset):
+    """Return True for multilingual presets; enables cross-lingual checks."""
+    return preset in _XLM_ROBERTA_PRESETS or preset == "multilingual_e5_small"
+
 
 # Multilingual test sentences covering three language families.
 TEST_TEXTS = [
@@ -92,6 +162,14 @@ QUERY_DOC_PAIRS = (
         "passage: Jupiter has a prominent red spot.",
     ],
 )
+
+# English test sentences for BGE embedding parity check.
+# Sentences 0 and 1 are semantically closer than 0 and 2.
+BGE_TEST_TEXTS = [
+    "The weather is lovely today.",
+    "It's so sunny outside!",
+    "He drove to the stadium.",
+]
 
 # Each triplet: (anchor_EN, positive_other_lang, negative_other_lang).
 # sim(anchor, positive) must exceed sim(anchor, negative) to pass.
@@ -120,8 +198,19 @@ def _hf_mean_pool(outputs, attention_mask):
     return (embeddings / embeddings.norm(dim=-1, keepdim=True)).numpy()
 
 
-def _hf_encode(hf_model, hf_tokenizer, texts):
-    """Encode texts using HuggingFace model with mean pooling + L2 norm."""
+def _hf_cls_pool(outputs):
+    """CLS-pool HuggingFace token embeddings with L2 normalization."""
+    cls_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+    norms = np.linalg.norm(cls_embeddings, axis=1, keepdims=True)
+    return cls_embeddings / np.maximum(norms, 1e-12)
+
+
+def _hf_encode(hf_model, hf_tokenizer, texts, mean_pool=False):
+    """Encode texts using a HuggingFace model.
+
+    Uses mean pooling + L2 norm when mean_pool=True (Multilingual-E5), or
+    CLS token + L2 norm when mean_pool=False (BGE).
+    """
     encoded = hf_tokenizer(
         texts,
         padding=True,
@@ -130,22 +219,94 @@ def _hf_encode(hf_model, hf_tokenizer, texts):
     )
     with torch.no_grad():
         outputs = hf_model(**encoded)
-    return _hf_mean_pool(outputs, encoded["attention_mask"])
+    if mean_pool:
+        return _hf_mean_pool(outputs, encoded["attention_mask"])
+    return _hf_cls_pool(outputs)
 
 
-def validate_output(keras_embedder, hf_model_id):
-    """Validate numerical parity between the converted KerasHub model and HF.
+def _precompute_hf_results(
+    hf_model, hf_tokenizer, use_mean_pool, is_multilingual, is_xlm_roberta
+):
+    """Compute all HF-side validation data while the model is already loaded.
 
-    Performs five checks:
-    1. Parameter count verification.
-    2. Embedding output comparison (max/mean absolute difference).
-    3. L2 norm check (embeddings must be unit-length).
-    4. Cosine similarity ranking consistency across multilingual inputs.
-    5. Semantic search ranking consistency (query vs. passages).
+    Calling this during the weight-conversion phase (before the KerasHub model
+    is built) means validate_output never needs to load a second HF model,
+    eliminating the OOM caused by the xet background download running
+    concurrently with KerasHub inference.
 
     Args:
-        keras_embedder: Converted KerasHub BertTextEmbedder.
-        hf_model_id: HuggingFace model ID to compare against.
+        hf_model: Loaded HuggingFace model (eval mode).
+        hf_tokenizer: Corresponding HuggingFace tokenizer.
+        use_mean_pool: bool. True for mean pooling (multilingual_e5_*).
+        is_multilingual: bool. True for multilingual presets.
+        is_xlm_roberta: bool. True for pure XLM-RoBERTa presets.
+
+    Returns:
+        dict with keys: hf_params, hf_embeddings, hf_sims_search, hf_best,
+        parity_texts, query, documents.
+    """
+    if is_xlm_roberta:
+        hf_params = sum(
+            p.numel()
+            for name, p in hf_model.named_parameters()
+            if not name.startswith("pooler.")
+            and name != "embeddings.token_type_embeddings.weight"
+        )
+        hf_params -= 2 * hf_model.embeddings.position_embeddings.weight.shape[1]
+    else:
+        hf_params = sum(p.numel() for p in hf_model.parameters())
+
+    parity_texts = TEST_TEXTS if is_multilingual else BGE_TEST_TEXTS
+    hf_embeddings = _hf_encode(
+        hf_model, hf_tokenizer, parity_texts, mean_pool=use_mean_pool
+    )
+
+    query, documents = QUERY_DOC_PAIRS
+    hf_q = _hf_encode(hf_model, hf_tokenizer, [query], mean_pool=use_mean_pool)
+    hf_d = _hf_encode(
+        hf_model, hf_tokenizer, documents, mean_pool=use_mean_pool
+    )
+    hf_sims_search = hf_q @ hf_d.T
+    hf_best = int(np.argmax(hf_sims_search))
+
+    return {
+        "hf_params": hf_params,
+        "hf_embeddings": hf_embeddings,
+        "hf_sims_search": hf_sims_search,
+        "hf_best": hf_best,
+        "parity_texts": parity_texts,
+        "query": query,
+        "documents": documents,
+    }
+
+
+def validate_output(
+    keras_embedder,
+    hf_results,
+    use_mean_pool=False,
+    is_multilingual=False,
+):
+    """Validate numerical parity between the converted KerasHub model and HF.
+
+    Performs checks appropriate for the model family:
+    - All models: parameter count, embedding parity, L2 norm, semantic search.
+    - English BGE: intra-batch cosine ranking consistency.
+    - Multilingual (bge_m3, multilingual_e5_*): cross-lingual ranking
+      consistency (EN↔FR, EN↔ZH).
+
+    HF inference is performed during the weight-conversion phase in main()
+    (see _precompute_hf_results) so that the large HF model is fully freed
+    before the KerasHub model runs inference. This prevents OOM kills caused
+    by the xet streaming download running concurrently with KerasHub.
+
+    Args:
+        keras_embedder: Converted KerasHub text embedder instance.
+        hf_results: dict returned by _precompute_hf_results, containing
+            pre-computed HF param count and embeddings.
+        use_mean_pool: bool. True for mean pooling (multilingual_e5_*),
+            False for CLS pooling (BGE / bge_m3).
+        is_multilingual: bool. True for multilingual presets; enables
+            cross-lingual ranking checks.
 
     Returns:
         bool: True if all checks pass.
@@ -154,17 +315,19 @@ def validate_output(keras_embedder, hf_model_id):
     print("NUMERICAL VERIFICATION")
     print("=" * 60)
 
-    print(f"\nLoading HuggingFace model: {hf_model_id}")
-    hf_tokenizer = AutoTokenizer.from_pretrained(hf_model_id)
-    hf_model = AutoModel.from_pretrained(hf_model_id)
-    hf_model.eval()
+    hf_params = hf_results["hf_params"]
+    hf_embeddings = hf_results["hf_embeddings"]
+    hf_sims_search = hf_results["hf_sims_search"]
+    hf_best = hf_results["hf_best"]
+    parity_texts = hf_results["parity_texts"]
+    query = hf_results["query"]
+    documents = hf_results["documents"]
 
     # =========================================
     # PARAMETER COUNT
     # =========================================
     print("\n--- Parameter Count ---")
     keras_params = keras_embedder.backbone.count_params()
-    hf_params = sum(p.numel() for p in hf_model.parameters())
     print(f"KerasHub params:    {keras_params:,}")
     print(f"HuggingFace params: {hf_params:,}")
     param_diff = abs(keras_params - hf_params)
@@ -174,18 +337,24 @@ def validate_output(keras_embedder, hf_model_id):
         print(f"❌ Mismatch — diff: {param_diff:,}")
 
     # =========================================
-    # EMBEDDING PARITY (MULTILINGUAL)
+    # EMBEDDING PARITY
     # =========================================
-    print("\n--- Embedding Parity (multilingual) ---")
-    print(f"Test inputs: {TEST_TEXTS}")
-
-    print("\nComputing HuggingFace embeddings (mean pool + L2 norm)...")
-    hf_embeddings = _hf_encode(hf_model, hf_tokenizer, TEST_TEXTS)
+    pool_desc = "mean pool" if use_mean_pool else "CLS pool"
+    if is_multilingual:
+        print(
+            f"\n--- Embedding Parity (multilingual, {pool_desc} + L2 norm) ---"
+        )
+    else:
+        print("\n--- Embedding Parity (CLS + L2 norm) ---")
+    print(f"Test inputs: {parity_texts}")
     print(f"HF shape: {hf_embeddings.shape}")
     print(f"HF[0][:5]: {hf_embeddings[0][:5]}")
-
     print("\nComputing KerasHub embeddings...")
-    keras_embeddings = np.array(keras_embedder.encode_text(TEST_TEXTS))
+    if is_multilingual:
+        keras_embeddings = np.array(keras_embedder.encode_text(parity_texts))
+    else:
+        keras_embeddings = np.array(keras_embedder.predict(parity_texts))
+
     print(f"KerasHub shape: {keras_embeddings.shape}")
     print(f"KerasHub[0][:5]: {keras_embeddings[0][:5]}")
 
@@ -193,6 +362,23 @@ def validate_output(keras_embedder, hf_model_id):
     mean_diff = np.mean(np.abs(hf_embeddings - keras_embeddings))
     print(f"\nMax absolute diff:  {max_diff:.2e}")
     print(f"Mean absolute diff: {mean_diff:.2e}")
+
+    # =========================================
+    # INTRA-BATCH RANKING (English BGE only)
+    # Sentences 0 and 1 are semantically closer than 0 and 2.
+    # =========================================
+    ranking_ok = True
+    if not is_multilingual:
+        print("\n--- Ranking Consistency ---")
+        keras_batch_sims = keras_embeddings @ keras_embeddings.T
+        hf_batch_sims = hf_embeddings @ hf_embeddings.T
+        keras_ranking_ok = bool(keras_batch_sims[0, 1] > keras_batch_sims[0, 2])
+        hf_ranking_ok = bool(hf_batch_sims[0, 1] > hf_batch_sims[0, 2])
+        ranking_ok = keras_ranking_ok
+        print(
+            f"Ranking consistency: KerasHub={keras_ranking_ok}, "
+            f"HF={hf_ranking_ok}"
+        )
 
     # =========================================
     # L2 NORM CHECK
@@ -205,37 +391,37 @@ def validate_output(keras_embedder, hf_model_id):
     norms_ok = np.allclose(keras_norms, 1.0, atol=1e-5)
 
     # =========================================
-    # CROSS-LINGUAL RANKING
+    # CROSS-LINGUAL RANKING (multilingual models)
     # =========================================
-    print("\n--- Cross-lingual Ranking ---")
-    print("sim(anchor, same-meaning in other lang) must exceed")
-    print("sim(anchor, different-meaning in other lang)")
-    lang_labels = ["EN↔FR", "EN↔ZH"]
     cross_lingual_ok = True
-    for label, (anchor, positive, negative) in zip(
-        lang_labels, CROSS_LINGUAL_TRIPLETS
-    ):
-        embs = np.array(
-            keras_embedder.encode_text([anchor, positive, negative])
-        )
-        # similarity returns shape (1, 2): [anchor↔positive, anchor↔negative]
-        sims = ops.convert_to_numpy(
-            keras_embedder.similarity(embs[0:1], embs[1:])
-        )
-        sim_pos, sim_neg = float(sims[0, 0]), float(sims[0, 1])
-        ok = sim_pos > sim_neg
-        cross_lingual_ok = cross_lingual_ok and ok
-        status = "✅" if ok else "❌"
-        print(
-            f"{label}: sim(same)={sim_pos:.4f} > sim(diff)={sim_neg:.4f} "
-            f"{status}"
-        )
+    if is_multilingual:
+        print("\n--- Cross-lingual Ranking ---")
+        print("sim(anchor, same-meaning in other lang) must exceed")
+        print("sim(anchor, different-meaning in other lang)")
+        lang_labels = ["EN↔FR", "EN↔ZH"]
+        for label, (anchor, positive, negative) in zip(
+            lang_labels, CROSS_LINGUAL_TRIPLETS
+        ):
+            embs = np.array(
+                keras_embedder.encode_text([anchor, positive, negative])
+            )
+            # similarity shape (1, 2): [anchor↔positive, anchor↔negative]
+            sims = ops.convert_to_numpy(
+                keras_embedder.similarity(embs[0:1], embs[1:])
+            )
+            sim_pos, sim_neg = float(sims[0, 0]), float(sims[0, 1])
+            ok = sim_pos > sim_neg
+            cross_lingual_ok = cross_lingual_ok and ok
+            status = "✅" if ok else "❌"
+            print(
+                f"{label}: sim(same)={sim_pos:.4f} > sim(diff)={sim_neg:.4f} "
+                f"{status}"
+            )
 
     # =========================================
     # SEMANTIC SEARCH RANKING
     # =========================================
     print("\n--- Semantic Search Ranking ---")
-    query, documents = QUERY_DOC_PAIRS
     print(f"Query: {query}")
     print(f"Documents: {documents}")
 
@@ -245,11 +431,7 @@ def validate_output(keras_embedder, hf_model_id):
         keras_embedder.similarity(keras_q, keras_d)
     )
     keras_best = int(np.argmax(keras_sims))
-
-    hf_q = _hf_encode(hf_model, hf_tokenizer, [query])
-    hf_d = _hf_encode(hf_model, hf_tokenizer, documents)
-    hf_sims = hf_q @ hf_d.T
-    hf_best = int(np.argmax(hf_sims))
+    hf_sims = hf_sims_search
 
     print(f"\nKerasHub sims: {keras_sims[0]} -> Best: {documents[keras_best]}")
     print(f"HF sims:       {hf_sims[0]} -> Best: {documents[hf_best]}")
@@ -271,11 +453,19 @@ def validate_output(keras_embedder, hf_model_id):
     elif mean_diff > 1e-4:
         print(f"⚠️  WARN: Mean diff {mean_diff:.2e} > 1e-4 (FP32 variance)")
 
+    if max_diff > 1e-3:
+        print(f"❌ FAILED: Max diff {max_diff:.2e} exceeds 1e-3")
+        passed = False
+
     if not norms_ok:
         print("❌ FAILED: Embeddings are not unit-length")
         passed = False
 
-    if not cross_lingual_ok:
+    if not is_multilingual and not ranking_ok:
+        print("❌ FAILED: Ranking inconsistency")
+        passed = False
+
+    if is_multilingual and not cross_lingual_ok:
         print(
             "❌ FAILED: Cross-lingual ranking — same-meaning pair scored "
             "below unrelated pair"
@@ -302,6 +492,9 @@ def main(_):
         )
 
     hf_model_id = PRESET_MAP[preset]
+    is_xlm_r = _is_xlm_roberta(preset)
+    use_mean_pool_flag = _use_mean_pool(preset)
+    is_multi = _is_multilingual(preset)
 
     print(f"\n{'=' * 60}")
     print(f"Converting: {hf_model_id} -> {preset}")
@@ -319,28 +512,125 @@ def main(_):
             transformers_config = json.load(f)
 
         # Build KerasHub backbone from HF config.
-        keras_config = convert_backbone_config(transformers_config)
+        if is_xlm_r:
+            keras_config = xlm_converter.convert_backbone_config(
+                transformers_config
+            )
+        else:
+            keras_config = bert_converter.convert_backbone_config(
+                transformers_config
+            )
         print(f"\nBackbone config: {keras_config}")
-        backbone = keras_hub.models.BertBackbone(
-            **keras_config, dtype="float32"
-        )
+        if is_xlm_r:
+            backbone = keras_hub.models.XLMRobertaBackbone(
+                **keras_config, dtype="float32"
+            )
+        else:
+            backbone = keras_hub.models.BertBackbone(
+                **keras_config, dtype="float32"
+            )
         print(f"Backbone parameters: {backbone.count_params():,}")
 
-        # Download and load weights.
-        print("\nDownloading model.safetensors...")
-        hf_hub_download(hf_model_id, "model.safetensors", local_dir=temp_dir)
+        # Download model weights explicitly so the file is on disk before any
+        # AutoModel.from_pretrained call. This prevents xet streaming, which
+        # downloads asynchronously in a background thread and keeps large
+        # memory buffers alive even after `del model`, causing OOM when
+        # KerasHub inference follows.
+        #
+        # Try model.safetensors first (most models); some repos (e.g.
+        # BAAI/bge-m3) only have pytorch_model.bin on the main branch.
+        print("\nDownloading model weights...")
+        from huggingface_hub.errors import EntryNotFoundError
+
+        try:
+            hf_hub_download(
+                hf_model_id, "model.safetensors", local_dir=temp_dir
+            )
+        except EntryNotFoundError:
+            print(
+                "model.safetensors not found on main — "
+                "downloading pytorch_model.bin and converting to safetensors."
+            )
+            bin_path = hf_hub_download(
+                hf_model_id, "pytorch_model.bin", local_dir=temp_dir
+            )
+            from safetensors.torch import save_file as _save_safetensors
+
+            bin_state_dict = torch.load(
+                bin_path, map_location="cpu", weights_only=True
+            )
+            _save_safetensors(
+                bin_state_dict,
+                os.path.join(temp_dir, "model.safetensors"),
+            )
+            del bin_state_dict
+
+        # Load HF model from local directory for validation inference.
+        # local_files_only=True guarantees no network activity (no xet thread).
+        print("Loading HuggingFace model for validation...")
+        hf_model_for_val = AutoModel.from_pretrained(
+            temp_dir, local_files_only=True
+        )
+        hf_model_for_val.eval()
+
+        # Pre-compute all HF validation data while the model is in memory so
+        # the HF model is freed before KerasHub inference runs.
+        print("Pre-computing HuggingFace validation data...")
+        hf_tokenizer_for_val = AutoTokenizer.from_pretrained(
+            temp_dir, local_files_only=True
+        )
+        hf_results = _precompute_hf_results(
+            hf_model_for_val,
+            hf_tokenizer_for_val,
+            use_mean_pool=use_mean_pool_flag,
+            is_multilingual=is_multi,
+            is_xlm_roberta=is_xlm_r,
+        )
+        del hf_model_for_val, hf_tokenizer_for_val
+        import gc
+
+        gc.collect()
+
+        # Port weights with SafetensorLoader — reads the local safetensors file
+        # one tensor at a time with negligible extra memory.
         print("Converting weights...")
         with SafetensorLoader(temp_dir) as loader:
-            convert_weights(backbone, loader, transformers_config)
+            if is_xlm_r:
+                xlm_converter.convert_weights(
+                    backbone, loader, transformers_config
+                )
+            else:
+                bert_converter.convert_weights(
+                    backbone, loader, transformers_config
+                )
 
-        # Build XLM-RoBERTa tokenizer from SentencePiece proto.
-        print("\nDownloading sentencepiece.bpe.model...")
+        # Download tokenizer files and build tokenizer.
+        print("\nDownloading tokenizer files...")
         hf_hub_download(
-            hf_model_id, "sentencepiece.bpe.model", local_dir=temp_dir
+            hf_model_id, "tokenizer_config.json", local_dir=temp_dir
         )
-        tokenizer = XLMRobertaTokenizer(
-            proto=os.path.join(temp_dir, "sentencepiece.bpe.model")
-        )
+        if is_xlm_r:
+            # Pure XLM-RoBERTa models always use SentencePiece.
+            hf_hub_download(
+                hf_model_id, "sentencepiece.bpe.model", local_dir=temp_dir
+            )
+            tokenizer = xlm_converter.convert_tokenizer(
+                keras_hub.models.XLMRobertaTokenizer, temp_dir
+            )
+        else:
+            # BERT-based models: download the appropriate vocab file.
+            # multilingual_e5_small uses SentencePiece; others use WordPiece.
+            if _use_mean_pool(preset):
+                hf_hub_download(
+                    hf_model_id,
+                    "sentencepiece.bpe.model",
+                    local_dir=temp_dir,
+                )
+            else:
+                hf_hub_download(hf_model_id, "vocab.txt", local_dir=temp_dir)
+            tokenizer = bert_converter.convert_tokenizer(
+                keras_hub.models.BertTokenizer, temp_dir
+            )
 
         # Download sentence-transformer config files to derive pooling,
         # normalization, and sequence length dynamically.
@@ -351,26 +641,52 @@ def main(_):
         ):
             hf_hub_download(hf_model_id, fname, local_dir=temp_dir)
 
-        task_config = load_task_config(temp_dir, transformers_config)
-        preprocessor_config = load_preprocessor_config(
-            temp_dir, transformers_config
-        )
+        if is_xlm_r:
+            task_config = xlm_converter.load_task_config(
+                temp_dir, transformers_config
+            )
+            preprocessor_config = xlm_converter.load_preprocessor_config(
+                temp_dir, transformers_config
+            )
+        else:
+            task_config = bert_converter.load_task_config(
+                temp_dir, transformers_config
+            )
+            preprocessor_config = bert_converter.load_preprocessor_config(
+                temp_dir, transformers_config
+            )
         print(f"Task config: {task_config}")
         print(f"Preprocessor config: {preprocessor_config}")
 
-        # Assemble BertTextEmbedder from config-derived settings.
-        preprocessor = keras_hub.models.BertTextEmbedderPreprocessor(
-            tokenizer=tokenizer,
-            **preprocessor_config,
-        )
-        embedder = BertTextEmbedder(
-            backbone=backbone,
-            preprocessor=preprocessor,
-            **task_config,
-        )
+        # Assemble embedder from config-derived settings.
+        if is_xlm_r:
+            preprocessor = XLMRobertaTextEmbedderPreprocessor(
+                tokenizer=tokenizer,
+                **preprocessor_config,
+            )
+            embedder = XLMRobertaTextEmbedder(
+                backbone=backbone,
+                preprocessor=preprocessor,
+                **task_config,
+            )
+        else:
+            preprocessor = keras_hub.models.BertTextEmbedderPreprocessor(
+                tokenizer=tokenizer,
+                **preprocessor_config,
+            )
+            embedder = BertTextEmbedder(
+                backbone=backbone,
+                preprocessor=preprocessor,
+                **task_config,
+            )
 
         # Validate.
-        passed = validate_output(embedder, hf_model_id)
+        passed = validate_output(
+            embedder,
+            hf_results,
+            use_mean_pool=use_mean_pool_flag,
+            is_multilingual=is_multi,
+        )
         if not passed:
             print("\n⚠️  Verification failed. Preset not saved.")
             return
