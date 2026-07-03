@@ -77,6 +77,12 @@ from keras_hub.src.models.bert.bert_text_embedder_preprocessor import (
 from keras_hub.src.models.bert.bert_tokenizer import (
     BertTokenizer as BertTokenizer,
 )
+from keras_hub.src.models.block_diffusion_lm import (
+    BlockDiffusionLM as BlockDiffusionLM,
+)
+from keras_hub.src.models.block_diffusion_lm_preprocessor import (
+    BlockDiffusionLMPreprocessor as BlockDiffusionLMPreprocessor,
+)
 from keras_hub.src.models.bloom.bloom_backbone import (
     BloomBackbone as BloomBackbone,
 )
@@ -348,6 +354,12 @@ from keras_hub.src.models.gemma4.gemma4_audio_encoder import (
 )
 from keras_hub.src.models.gemma4.gemma4_backbone import (
     Gemma4Backbone as Gemma4Backbone,
+)
+from keras_hub.src.models.gemma4.gemma4_block_diffusion_lm import (
+    Gemma4BlockDiffusionLM as Gemma4BlockDiffusionLM,
+)
+from keras_hub.src.models.gemma4.gemma4_block_diffusion_lm_preprocessor import (
+    Gemma4BlockDiffusionLMPreprocessor as Gemma4BlockDiffusionLMPreprocessor,
 )
 from keras_hub.src.models.gemma4.gemma4_causal_lm import (
     Gemma4CausalLM as Gemma4CausalLM,

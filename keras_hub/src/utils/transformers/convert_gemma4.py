@@ -142,7 +142,7 @@ def load_preprocessor_config(preset, transformers_config):
 def convert_backbone_config(transformers_config):
     """Map a Transformers config dict → Gemma4Backbone keyword arguments."""
     model_type = transformers_config.get("model_type", "gemma4")
-    is_text_only = model_type == "gemma4_text"
+    is_text_only = model_type in ("gemma4_text", "diffusion_gemma_text")
 
     if is_text_only:
         text_cfg = transformers_config
@@ -150,7 +150,7 @@ def convert_backbone_config(transformers_config):
         audio_encoder = None
         image_size = None
     else:
-        text_cfg = transformers_config["text_config"]
+        text_cfg = transformers_config.get("text_config", transformers_config)
         image_size = 896
 
         # Vision encoder.
@@ -295,7 +295,10 @@ def convert_backbone_config(transformers_config):
         "global_rope_wavelength": global_rope_theta,
         "local_rope_wavelength": local_rope_theta,
         "use_double_wide_mlp": text_cfg.get("use_double_wide_mlp", False),
-        "enable_moe_block": text_cfg.get("enable_moe_block", False),
+        "enable_moe_block": (
+            text_cfg.get("enable_moe_block")
+            or bool(text_cfg.get("num_experts", 0))
+        ),
         "num_experts": text_cfg.get("num_experts", None),
         "expert_intermediate_dim": (
             text_cfg.get("moe_intermediate_size")
@@ -317,7 +320,12 @@ def convert_weights(backbone, loader, transformers_config):
     else:
         text_prefix = _resolve_prefix(
             loader,
-            ["model.language_model", "language_model"],
+            [
+                "model.language_model",
+                "language_model",
+                "model",
+                "model.decoder",
+            ],
         )
 
     def hf_key(suffix):
@@ -371,6 +379,47 @@ def convert_weights(backbone, loader, transformers_config):
     )
 
     return backbone
+
+
+def convert_head(task, loader, transformers_config):
+    """Port Gemma4BlockDiffusionSelfConditioning weights from the HF checkpoint.
+
+    Called automatically by ``TransformersPresetLoader.load_task`` for any
+    task loaded from a ``convert_gemma4`` converter.  For ``Gemma4CausalLM``
+    and other tasks that carry no weights beyond the backbone this function
+    is a no-op.
+
+    Args:
+        task: A Keras task model instance (e.g. ``Gemma4BlockDiffusionLM``).
+        loader: A ``SafetensorLoader`` pointing at the HF preset.
+        transformers_config: dict. The raw HuggingFace ``config.json``
+            contents (unused; present to satisfy the loader hook signature).
+    """
+    sc = getattr(task, "diffusion_self_conditioning", None)
+    if sc is None:
+        return  # Gemma4CausalLM and others: no task-level weights.
+
+    hf_prefix = "model.decoder.self_conditioning"
+    loader.port_weight(
+        keras_variable=sc.pre_norm.scale,
+        hf_weight_key=f"{hf_prefix}.pre_norm.weight",
+    )
+    loader.port_weight(
+        keras_variable=sc.gate_proj.kernel,
+        hf_weight_key=f"{hf_prefix}.gate_proj.weight",
+        hook_fn=lambda x, _: np.transpose(x),
+    )
+    loader.port_weight(
+        keras_variable=sc.up_proj.kernel,
+        hf_weight_key=f"{hf_prefix}.up_proj.weight",
+        hook_fn=lambda x, _: np.transpose(x),
+    )
+    loader.port_weight(
+        keras_variable=sc.down_proj.kernel,
+        hf_weight_key=f"{hf_prefix}.down_proj.weight",
+        hook_fn=lambda x, _: np.transpose(x),
+    )
+    # post_norm has no learnable scale (Gemma4VNorm) — no weight to port.
 
 
 def _convert_audio_encoder(audio_encoder, loader, transformers_config):
@@ -541,7 +590,12 @@ def _convert_vision_encoder(vision_encoder, loader, transformers_config):
     image_encoder = vision_encoder.get_layer("image_encoder")
     patch_embedder = image_encoder.patch_embedder
 
-    vis_prefix = "model.vision_tower"
+    # DiffusionGemma nests vision weights under model.encoder.*
+    model_type = transformers_config.get("model_type", "gemma4")
+    if model_type == "diffusion_gemma":
+        vis_prefix = "model.encoder.vision_tower"
+    else:
+        vis_prefix = "model.vision_tower"
 
     loader.port_weight(
         keras_variable=patch_embedder.input_proj.kernel,
@@ -563,7 +617,10 @@ def _convert_vision_encoder(vision_encoder, loader, transformers_config):
             loader,
         )
 
-    projector_prefix = "model.embed_vision"
+    if model_type == "diffusion_gemma":
+        projector_prefix = "model.encoder.embed_vision"
+    else:
+        projector_prefix = "model.embed_vision"
     vision_output = vision_encoder.get_layer("vision_output_encoder")
     loader.port_weight(
         keras_variable=vision_output.vision_input_projection.kernel,
@@ -767,10 +824,24 @@ def _convert_decoder_block(decoder_layer, layer_idx, loader, hf_key_fn):
             hf_weight_key=layer_key("router.per_expert_scale"),
         )
 
-    # layer_scalar — present on all text decoder layers (HF Buffer).
+    # layer_scalar is a registered buffer (not a parameter), so it is NOT
+    # included in _tied_weights_keys.  In DiffusionGemma checkpoints the
+    # canonical copy lives under model.decoder.layers.{i}.layer_scalar;
+    # the encoder copy lives under
+    # model.encoder.language_model.layers.{i}.layer_scalar.
+    # Both hold the same trained value, but only the decoder copy is present
+    # when the prefix resolves to "model.decoder".  Fall back to the encoder
+    # namespace if the primary key is absent.
+    _layer_scalar_key = layer_key("layer_scalar")
+    try:
+        loader.get_tensor(_layer_scalar_key)
+    except Exception:
+        _layer_scalar_key = (
+            f"model.encoder.language_model.layers.{layer_idx}.layer_scalar"
+        )
     loader.port_weight(
         keras_variable=decoder_layer.layer_scalar,
-        hf_weight_key=layer_key("layer_scalar"),
+        hf_weight_key=_layer_scalar_key,
         hook_fn=lambda x, _: np.squeeze(x),
     )
 

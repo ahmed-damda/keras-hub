@@ -64,7 +64,7 @@ class TransformersPresetLoader(PresetLoader):
             self.converter = convert_gemma3
         elif model_type == "gemma3n":
             self.converter = convert_gemma3n
-        elif model_type in ("gemma4", "gemma4_text"):
+        elif model_type in ("gemma4", "gemma4_text", "diffusion_gemma"):
             self.converter = convert_gemma4
         elif model_type == "gemma4_assistant":
             self.converter = convert_gemma4_assistant
@@ -134,6 +134,7 @@ class TransformersPresetLoader(PresetLoader):
         architecture = self.config["architectures"][0]
         is_classifier = issubclass(cls, ImageClassifier)
         is_assistant = architecture == "Gemma4AssistantForCausalLM"
+        has_convert_head = hasattr(self.converter, "convert_head")
 
         if hasattr(self.converter, "convert_task_config"):
             task_config = self.converter.convert_task_config(self.config)
@@ -148,6 +149,7 @@ class TransformersPresetLoader(PresetLoader):
             not is_classifier
             and not is_assistant
             and architecture != "ViTModel"
+            and not has_convert_head
         ):
             return super().load_task(
                 cls, load_weights, load_task_weights, **kwargs

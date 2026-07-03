@@ -184,4 +184,16 @@ backbone_presets = {
             "kaggle://keras/gemma4/keras/gemma4_instruct_31b_assistant/1"
         ),
     },
+    "diffusion_gemma_26b_a4b_it": {
+        "metadata": {
+            "description": (
+                "DiffusionGemma 26B MoE instruction-tuned model. 25.2B total "
+                "parameters (3.8B active), 30 layers, 128 experts. Discrete "
+                "block-diffusion text generation with multimodal inputs."
+            ),
+            "params": 25200000000,
+            "path": "gemma4",
+        },
+        "kaggle_handle": "kaggle://keras/gemma4/keras/diffusion_gemma_26b_a4b_it/1",
+    },
 }

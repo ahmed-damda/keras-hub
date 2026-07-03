@@ -388,6 +388,30 @@ class Gemma4TextDecoderBlock(keras.layers.Layer):
         )
         return mask
 
+    def _compute_canvas_bidirectional_attention_mask(
+        self, canvas_mask, batch_size, input_length, output_length
+    ):
+        """Allow canvas tokens to attend fully to all positions (no causal).
+
+        Unlike the vision bidirectional mask, the canvas mask applies on ALL
+        layer types (both sliding-window and global), because the diffusion
+        decoder requires each canvas position to see the full encoder context
+        and all other canvas positions simultaneously.
+        """
+        # canvas_mask shape: (B, output_length), True at canvas positions.
+        # We build a (B, output_length, input_length) mask where each canvas
+        # query position attends to every key position.
+        canvas_mask_cast = ops.cast(canvas_mask, dtype="bool")
+        # query_is_canvas: (B, output_length, 1)
+        query_is_canvas = ops.expand_dims(canvas_mask_cast, axis=2)
+        # full_row: (B, output_length, input_length) — all True
+        full_row = ops.ones(
+            (batch_size, output_length, input_length), dtype="bool"
+        )
+        # Where a query is a canvas token, allow attending to every key.
+        bidirectional_canvas = ops.logical_and(query_is_canvas, full_row)
+        return bidirectional_canvas
+
     def _compute_attention_mask(
         self,
         x,
@@ -395,6 +419,7 @@ class Gemma4TextDecoderBlock(keras.layers.Layer):
         vision_mask,
         cache,
         cache_update_index,
+        canvas_mask=None,
     ):
         decoder_mask = merge_padding_and_attention_mask(
             inputs=x, padding_mask=padding_mask, attention_mask=None
@@ -448,6 +473,21 @@ class Gemma4TextDecoderBlock(keras.layers.Layer):
             )
             causal_mask = ops.logical_or(causal_mask, bidirectional_image_mask)
 
+        # Canvas tokens attend fully bidirectionally on ALL layer types (both
+        # sliding-window and global).  This differs from vision_mask which is
+        # only applied on non-global layers.  The canvas bidirectional mask
+        # overrides the causal / sliding-window constraint for canvas queries.
+        if canvas_mask is not None:
+            bidirectional_canvas_mask = (
+                self._compute_canvas_bidirectional_attention_mask(
+                    canvas_mask,
+                    batch_size=batch_size,
+                    input_length=input_length,
+                    output_length=output_length,
+                )
+            )
+            causal_mask = ops.logical_or(causal_mask, bidirectional_canvas_mask)
+
         # Respect the padding mask.
         if decoder_mask is not None:
             causal_mask = ops.minimum(decoder_mask, causal_mask)
@@ -465,6 +505,7 @@ class Gemma4TextDecoderBlock(keras.layers.Layer):
         per_layer_input=None,
         shared_kv=None,
         positions=None,
+        canvas_mask=None,
     ):
         # Clamp float16 to avoid overflow.
         is_float16 = keras.backend.standardize_dtype(x.dtype) == "float16"
@@ -475,7 +516,12 @@ class Gemma4TextDecoderBlock(keras.layers.Layer):
         residual = x
         normalized_x = self.pre_attention_norm(x)
         attention_mask = self._compute_attention_mask(
-            normalized_x, padding_mask, vision_mask, cache, cache_update_index
+            normalized_x,
+            padding_mask,
+            vision_mask,
+            cache,
+            cache_update_index,
+            canvas_mask=canvas_mask,
         )
         if cache is not None:
             attention, new_cache = self.attention(
