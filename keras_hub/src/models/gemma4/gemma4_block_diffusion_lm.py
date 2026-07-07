@@ -181,6 +181,7 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
                 vision_mask=vision_mask,
                 shared_kv=shared_kv,
                 per_layer_input=per_layer_input_i,
+                use_encoder_scalar=True,
             )
             caches.append(next_cache)
 

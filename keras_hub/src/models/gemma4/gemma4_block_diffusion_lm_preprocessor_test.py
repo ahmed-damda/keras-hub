@@ -22,10 +22,6 @@ class Gemma4BlockDiffusionLMPreprocessorTest(TestCase):
             **self.init_kwargs
         )
 
-    # ------------------------------------------------------------------
-    # Training path (call())
-    # ------------------------------------------------------------------
-
     def test_preprocessor_call_shape(self):
         """call() packs strings into (token_ids, padding_mask) of the
         correct shape."""
@@ -92,10 +88,6 @@ class Gemma4BlockDiffusionLMPreprocessorTest(TestCase):
         results = self.preprocessor.generate_postprocess(canvas)
         self.assertEqual(len(results), 2)
 
-    # ------------------------------------------------------------------
-    # Serialization
-    # ------------------------------------------------------------------
-
     def test_serialization(self):
         """Preprocessor config roundtrip preserves all parameters."""
         self.run_serialization_test(self.preprocessor)
@@ -104,10 +96,6 @@ class Gemma4BlockDiffusionLMPreprocessorTest(TestCase):
         """sequence_length setter updates the underlying packer."""
         self.preprocessor.sequence_length = 16
         self.assertEqual(self.preprocessor.sequence_length, 16)
-
-    # ------------------------------------------------------------------
-    # Preset smoke-test (requires credentials)
-    # ------------------------------------------------------------------
 
     @pytest.mark.kaggle_key_required
     @pytest.mark.extra_large

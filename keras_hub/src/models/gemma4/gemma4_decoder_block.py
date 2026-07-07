@@ -86,6 +86,13 @@ class Gemma4TextDecoderBlock(keras.layers.Layer):
         is_text_layer: bool. Whether this block is a text (as opposed to
             vision) decoder layer; controls whether a non-trainable
             `layer_scalar` is applied to the output. Defaults to `True`.
+        has_encoder_layer_scalar: bool. When `True`, registers a second
+            non-trainable weight `encoder_layer_scalar` (init 1.0) alongside
+            the standard `layer_scalar`. Used by DiffusionGemma models where
+            the encoder and decoder passes use different per-layer scalars.
+            The caller selects which scalar to use via `use_encoder_scalar` in
+            `call()`. Has no effect when `is_text_layer=False`. Defaults to
+            `False`.
     """
 
     def __init__(
@@ -118,6 +125,7 @@ class Gemma4TextDecoderBlock(keras.layers.Layer):
         expert_intermediate_dim=None,
         num_experts_per_token=8,
         is_text_layer=True,
+        has_encoder_layer_scalar=False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -153,6 +161,7 @@ class Gemma4TextDecoderBlock(keras.layers.Layer):
         self.expert_intermediate_dim = expert_intermediate_dim
         self.num_experts_per_token = num_experts_per_token
         self.is_text_layer = is_text_layer
+        self.has_encoder_layer_scalar = has_encoder_layer_scalar
         # KV-shared layers optionally use a wider MLP (double intermediate).
         self.actual_intermediate_dim = (
             intermediate_dim * 2
@@ -359,6 +368,15 @@ class Gemma4TextDecoderBlock(keras.layers.Layer):
                 initializer="ones",
                 trainable=False,
             )
+            # DiffusionGemma encoder pass uses a separate scalar that differs
+            # from the decoder's layer_scalar.
+            if self.has_encoder_layer_scalar:
+                self.encoder_layer_scalar = self.add_weight(
+                    name="encoder_layer_scalar",
+                    shape=(),
+                    initializer="ones",
+                    trainable=False,
+                )
 
         self.built = True
 
@@ -506,6 +524,7 @@ class Gemma4TextDecoderBlock(keras.layers.Layer):
         shared_kv=None,
         positions=None,
         canvas_mask=None,
+        use_encoder_scalar=False,
     ):
         # Clamp float16 to avoid overflow.
         is_float16 = keras.backend.standardize_dtype(x.dtype) == "float16"
@@ -638,8 +657,14 @@ class Gemma4TextDecoderBlock(keras.layers.Layer):
 
         # Text decoder layers scale the output by their layer_scalar.
         # Applied AFTER the per-layer input gate (matching HF order).
+        # DiffusionGemma encoder pass uses encoder_layer_scalar instead.
         if self.is_text_layer:
-            x = x * ops.cast(self.layer_scalar, x.dtype)
+            scalar = (
+                self.encoder_layer_scalar
+                if (use_encoder_scalar and self.has_encoder_layer_scalar)
+                else self.layer_scalar
+            )
+            x = x * ops.cast(scalar, x.dtype)
 
         return x, new_cache
 
@@ -685,6 +710,7 @@ class Gemma4TextDecoderBlock(keras.layers.Layer):
                 "expert_intermediate_dim": self.expert_intermediate_dim,
                 "num_experts_per_token": self.num_experts_per_token,
                 "is_text_layer": self.is_text_layer,
+                "has_encoder_layer_scalar": self.has_encoder_layer_scalar,
             }
         )
         return config

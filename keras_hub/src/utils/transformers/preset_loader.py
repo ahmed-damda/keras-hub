@@ -9,6 +9,7 @@ from keras_hub.src.utils.transformers import convert_albert
 from keras_hub.src.utils.transformers import convert_bart
 from keras_hub.src.utils.transformers import convert_bert
 from keras_hub.src.utils.transformers import convert_deit
+from keras_hub.src.utils.transformers import convert_diffusion_gemma
 from keras_hub.src.utils.transformers import convert_dinov2
 from keras_hub.src.utils.transformers import convert_dinov3
 from keras_hub.src.utils.transformers import convert_distilbert
@@ -64,8 +65,10 @@ class TransformersPresetLoader(PresetLoader):
             self.converter = convert_gemma3
         elif model_type == "gemma3n":
             self.converter = convert_gemma3n
-        elif model_type in ("gemma4", "gemma4_text", "diffusion_gemma"):
+        elif model_type in ("gemma4", "gemma4_text"):
             self.converter = convert_gemma4
+        elif model_type in ("diffusion_gemma", "diffusion_gemma_text"):
+            self.converter = convert_diffusion_gemma
         elif model_type == "gemma4_assistant":
             self.converter = convert_gemma4_assistant
         elif model_type == "gpt2":

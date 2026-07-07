@@ -64,10 +64,6 @@ from PIL import Image
 
 import keras_hub
 
-# ---------------------------------------------------------------------------
-# Preset registry
-# ---------------------------------------------------------------------------
-
 PRESET_MAP = {
     "diffusion_gemma_26b_a4b_it": "google/diffusiongemma-26B-A4B-it",
 }
@@ -84,10 +80,6 @@ PROMPT_IMAGE = (
     "What is in this image?"
     "<end_of_turn>\n<start_of_turn>model\n"
 )
-
-# ---------------------------------------------------------------------------
-# Flags
-# ---------------------------------------------------------------------------
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string(
@@ -108,46 +100,58 @@ flags.DEFINE_boolean(
     "Useful when the full HF model cannot be loaded (e.g. insufficient RAM).",
 )
 
-# ---------------------------------------------------------------------------
-# HF model loading (verification only)
-# ---------------------------------------------------------------------------
 
+def _gather_hf_data(hf_repo_id, is_multimodal):
+    """Load HF model, run all HF-side computations, return a data dict.
 
-def _load_hf_model(hf_repo_id):
-    """Load the HF DiffusionGemma model and processor for numerics checks.
-
-    Tries ``AutoModelForCausalLM`` first; falls back to ``AutoModel`` if that
-    class is not registered for the model type (e.g. when DiffusionGemma
-    requires a custom ``model_type`` mapping).
-
-    Returns ``(hf_model, processor)`` in float32 on CPU.
+    The HF model is freed before this function returns; callers receive only
+    serialisable numpy arrays and scalars.
     """
-    from transformers import AutoModel
-    from transformers import AutoModelForCausalLM
     from transformers import AutoProcessor
+    from transformers import DiffusionGemmaForBlockDiffusion
 
     print(f"-> Loading HF model from {hf_repo_id} …")
-    load_kwargs = {
-        "device_map": "cpu",
-        "torch_dtype": torch.float32,
-    }
-
-    try:
-        hf_model = AutoModelForCausalLM.from_pretrained(
-            hf_repo_id, **load_kwargs
-        )
-    except Exception:
-        hf_model = AutoModel.from_pretrained(hf_repo_id, **load_kwargs)
-
+    hf_model = DiffusionGemmaForBlockDiffusion.from_pretrained(
+        hf_repo_id,
+        device_map="cpu",
+        torch_dtype=torch.float32,
+    )
     hf_model.eval()
     processor = AutoProcessor.from_pretrained(hf_repo_id)
     print("-> HF model loaded.")
-    return hf_model, processor
 
+    param_count = _count_hf_params(hf_model)
 
-# ---------------------------------------------------------------------------
-# Numerics verification helpers
-# ---------------------------------------------------------------------------
+    text_logits, text_input_ids, text_attention_mask = _hf_forward(
+        hf_model, processor, PROMPT_TEXT
+    )
+
+    image_data = None
+    if is_multimodal:
+        try:
+            raw_image = _load_test_image()
+            img_logits, img_input_ids, img_attention_mask = _hf_forward(
+                hf_model, processor, PROMPT_IMAGE, raw_image=raw_image
+            )
+            image_data = {
+                "logits": img_logits,
+                "input_ids": img_input_ids,
+                "attention_mask": img_attention_mask,
+            }
+        except Exception as e:
+            print(f"⚠️  Image HF forward skipped: {e}")
+
+    del hf_model, processor
+    gc.collect()
+    print("-> HF model freed.")
+
+    return {
+        "param_count": param_count,
+        "text_logits": text_logits,
+        "text_input_ids": text_input_ids,
+        "text_attention_mask": text_attention_mask,
+        "image": image_data,
+    }
 
 
 def _load_test_image():
@@ -252,35 +256,37 @@ def _test_numerics(label, backbone, kh_logits, hf_logits):
         )
 
 
-def _verify(diffusion_lm, hf_preset):
-    """Load HF model and compare backbone logits for text and image prompts."""
-    hf_repo_id = hf_preset.replace("hf://", "")
-    hf_model, processor = _load_hf_model(hf_repo_id)
+def _verify(diffusion_lm, hf_data, hf_preset):
+    """Compare KerasHub model against pre-computed HF outputs."""
     backbone = diffusion_lm.backbone
 
-    tokenizer = keras_hub.models.Gemma4Tokenizer.from_preset(hf_preset)
-    image_placeholder_id = tokenizer.image_placeholder_id
+    # --- Parameter count ---
+    print("\n--- Parameter Count ---")
+    hf_params = hf_data["param_count"]
+    kh_params = _count_kh_params(diffusion_lm)
+    print(f"   HF params: {hf_params:,}")
+    print(f"   KH params: {kh_params:,}")
+    np.testing.assert_equal(kh_params, hf_params)
+    print(f"✅ Parameter counts match: {kh_params:,}")
 
     # --- Text ---
     print("\n--- Numerics Verification: text ---")
-    hf_logits, hf_ids, hf_mask = _hf_forward(hf_model, processor, PROMPT_TEXT)
     kh_logits = _kh_forward(
         backbone,
-        hf_ids.astype(np.int32),
-        hf_mask.astype(np.int32),
+        hf_data["text_input_ids"].astype(np.int32),
+        hf_data["text_attention_mask"].astype(np.int32),
     )
-    _test_numerics("text", backbone, kh_logits, hf_logits)
+    _test_numerics("text", backbone, kh_logits, hf_data["text_logits"])
 
     # --- Image ---
-    if not backbone.text_only_model:
+    if hf_data["image"] is not None:
         print("\n--- Numerics Verification: image ---")
         try:
-            raw_image = _load_test_image()
-            hf_logits, hf_ids, hf_mask = _hf_forward(
-                hf_model, processor, PROMPT_IMAGE, raw_image=raw_image
-            )
-            token_ids = hf_ids.astype(np.int32)
-            padding_mask = hf_mask.astype(np.int32)
+            tokenizer = keras_hub.models.Gemma4Tokenizer.from_preset(hf_preset)
+            image_placeholder_id = tokenizer.image_placeholder_id
+            img = hf_data["image"]
+            token_ids = img["input_ids"].astype(np.int32)
+            padding_mask = img["attention_mask"].astype(np.int32)
             batch_size = token_ids.shape[0]
 
             # Build vision inputs from HF token IDs (image placeholder
@@ -310,19 +316,12 @@ def _verify(diffusion_lm, hf_preset):
                 # (see convert_gemma4_hf_checkpoints.py).
             )
             _test_numerics(
-                "image (token structure)", backbone, kh_logits, hf_logits
+                "image (token structure)", backbone, kh_logits, img["logits"]
             )
         except Exception as e:
             print(f"⚠️  Image numerics check skipped: {e}")
 
-    del hf_model, processor
-    gc.collect()
     print("-> HF verification complete.")
-
-
-# ---------------------------------------------------------------------------
-# Parameter counting
-# ---------------------------------------------------------------------------
 
 
 def _count_hf_params(hf_model):
@@ -340,11 +339,6 @@ def _count_kh_params(model):
     """Count parameters in a KerasHub model (backbone + task head)."""
     unique = {id(w): w for w in model.weights}.values()
     return sum(w.numpy().size for w in unique)
-
-
-# ---------------------------------------------------------------------------
-# Save helper
-# ---------------------------------------------------------------------------
 
 
 def _save_preset(diffusion_lm, hf_preset, preset_name, save_dtype):
@@ -369,11 +363,6 @@ def _save_preset(diffusion_lm, hf_preset, preset_name, save_dtype):
     print(f"-> Preset saved to {save_path}")
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
 def main(_):
     preset_name = FLAGS.preset
     if preset_name not in PRESET_MAP:
@@ -385,25 +374,23 @@ def main(_):
     hf_repo_id = PRESET_MAP[preset_name]
     hf_preset = f"hf://{hf_repo_id}"
 
-    # ── Step 1: Load model via KerasHub preset loader ─────────────────────────
-    # from_preset triggers the full TransformersPresetLoader pipeline:
-    #   convert_backbone_config  → backbone constructor kwargs
-    #   convert_weights          → backbone weights (vision enc + text decoder)
-    #   convert_head             → self-conditioning task-head weights
-    # No manual weight porting is needed after this call.
     print(f"-> Loading Gemma4BlockDiffusionLM from {hf_preset} …")
     diffusion_lm = keras_hub.models.Gemma4BlockDiffusionLM.from_preset(
         hf_preset, dtype="float32"
     )
     print("✓ All weights loaded (backbone + self-conditioning).")
 
-    # ── Step 2: Numerics verification (optional) ──────────────────────────────
+    # TODO Remove this once skip_verify is used
+    param_count = _count_kh_params(diffusion_lm)
+    print(f"-> KerasHub model parameter count: {param_count:,}")
+
     if not FLAGS.skip_verify:
-        _verify(diffusion_lm, hf_preset)
+        is_multimodal = not diffusion_lm.backbone.text_only_model
+        hf_data = _gather_hf_data(hf_repo_id, is_multimodal)
+        _verify(diffusion_lm, hf_data, hf_preset)
     else:
         print("-> Numerics verification skipped (--skip_verify).")
 
-    # ── Step 3: Save ──────────────────────────────────────────────────────────
     _save_preset(diffusion_lm, hf_preset, preset_name, FLAGS.save_dtype)
 
 

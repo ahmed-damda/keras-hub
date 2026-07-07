@@ -222,10 +222,6 @@ class Gemma4BlockDiffusionLMPreprocessor(BlockDiffusionLMPreprocessor):
         )
         self.built = True
 
-    # -------------------------------------------------------------------------
-    # Vision / audio index helpers (mirrors Gemma4CausalLMPreprocessor)
-    # -------------------------------------------------------------------------
-
     def _get_vision_indices(self, vision_mask, max_tokens=None):
         batch_size, sequence_length = vision_mask.shape
 
@@ -292,10 +288,6 @@ class Gemma4BlockDiffusionLMPreprocessor(BlockDiffusionLMPreprocessor):
             default_value=0,
         )
         return batched_audio_indices
-
-    # -------------------------------------------------------------------------
-    # Media preprocessing helpers
-    # -------------------------------------------------------------------------
 
     def _preprocess_images(self, images, batched):
         if isinstance(images, np.ndarray):
@@ -509,10 +501,6 @@ class Gemma4BlockDiffusionLMPreprocessor(BlockDiffusionLMPreprocessor):
             prompts_list[b] = vid_re.sub(rep, prompts_list[b], count=1)
         return tf.constant(prompts_list, dtype=tf.string)
 
-    # -------------------------------------------------------------------------
-    # Output formatting
-    # -------------------------------------------------------------------------
-
     def _build_multimodal_output(
         self,
         token_ids,
@@ -639,10 +627,6 @@ class Gemma4BlockDiffusionLMPreprocessor(BlockDiffusionLMPreprocessor):
             x["audio_mask"] = audio_mask_dummy
 
         return x
-
-    # -------------------------------------------------------------------------
-    # Shared prompt-expansion + tokenization
-    # -------------------------------------------------------------------------
 
     def _expand_and_tokenize_prompts(self, prompts, videos, audio, batched):
         """Expand media placeholders in prompts and return token IDs.
@@ -808,10 +792,6 @@ class Gemma4BlockDiffusionLMPreprocessor(BlockDiffusionLMPreprocessor):
 
         return pixel_values, pixel_position_ids, vision_mask
 
-    # -------------------------------------------------------------------------
-    # call() — training path
-    # -------------------------------------------------------------------------
-
     @preprocessing_function
     def call(self, x, y=None, sample_weight=None, sequence_length=None):
         sequence_length = sequence_length or self.sequence_length
@@ -960,10 +940,6 @@ class Gemma4BlockDiffusionLMPreprocessor(BlockDiffusionLMPreprocessor):
 
         return keras.utils.pack_x_y_sample_weight(out_x, label_ids, sw)
 
-    # -------------------------------------------------------------------------
-    # generate_preprocess() — inference path
-    # -------------------------------------------------------------------------
-
     @preprocessing_function
     def generate_preprocess(self, x, sequence_length=None):
         """Convert prompt inputs to model-ready tensors for generation.
@@ -1101,10 +1077,6 @@ class Gemma4BlockDiffusionLMPreprocessor(BlockDiffusionLMPreprocessor):
             canvas_mask=canvas_mask,
         )
 
-    # -------------------------------------------------------------------------
-    # generate_postprocess() — decoding path
-    # -------------------------------------------------------------------------
-
     @preprocessing_function
     def generate_postprocess(self, x):
         """Convert denoised integer token IDs back to strings.
@@ -1162,10 +1134,6 @@ class Gemma4BlockDiffusionLMPreprocessor(BlockDiffusionLMPreprocessor):
                     )
         return output
 
-    # -------------------------------------------------------------------------
-    # Properties
-    # -------------------------------------------------------------------------
-
     @property
     def _audio_placeholder_id(self):
         tok_id = self.tokenizer.audio_placeholder_id
@@ -1195,10 +1163,6 @@ class Gemma4BlockDiffusionLMPreprocessor(BlockDiffusionLMPreprocessor):
     @num_audio_tokens_per_clip.setter
     def num_audio_tokens_per_clip(self, value):
         self._num_audio_tokens_per_clip = value
-
-    # -------------------------------------------------------------------------
-    # Serialization
-    # -------------------------------------------------------------------------
 
     def get_config(self):
         config = super().get_config()

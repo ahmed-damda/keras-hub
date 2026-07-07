@@ -143,6 +143,165 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
         restored_output = restored_model(self.input_data)
         self.assertAllClose(model_output, restored_output, atol=1e-5, rtol=1e-5)
 
+    def test_encoder_layer_scalar_weights_exist(self):
+        """has_encoder_layer_scalar=True registers encoder_layer_scalar on
+        each block."""
+
+        backbone_kwargs = {
+            "vocabulary_size": self.tokenizer.vocabulary_size(),
+            "image_size": 16,
+            "num_layers": 2,
+            "num_query_heads": 2,
+            "num_key_value_heads": 1,
+            "hidden_dim": 8,
+            "intermediate_dim": 16,
+            "head_dim": 4,
+            "use_sliding_window_attention": True,
+            "sliding_window_size": 16,
+            "vision_encoder": None,
+            "has_encoder_layer_scalar": True,
+        }
+        backbone = Gemma4Backbone(**backbone_kwargs)
+        for layer in backbone.transformer_layers:
+            self.assertTrue(
+                hasattr(layer, "encoder_layer_scalar"),
+                f"{layer.name} missing encoder_layer_scalar",
+            )
+            self.assertTrue(
+                hasattr(layer, "layer_scalar"),
+                f"{layer.name} missing layer_scalar",
+            )
+
+    def test_encoder_and_decoder_scalars_are_independent(self):
+        """encoder_layer_scalar and layer_scalar independently scale
+        layer outputs."""
+        import numpy as np
+        from keras import ops
+
+        backbone_kwargs = {
+            "vocabulary_size": self.tokenizer.vocabulary_size(),
+            "image_size": 16,
+            "num_layers": 2,
+            "num_query_heads": 2,
+            "num_key_value_heads": 1,
+            "hidden_dim": 8,
+            "intermediate_dim": 16,
+            "head_dim": 4,
+            "use_sliding_window_attention": True,
+            "sliding_window_size": 16,
+            "vision_encoder": None,
+            "has_encoder_layer_scalar": True,
+        }
+        backbone = Gemma4Backbone(**backbone_kwargs)
+
+        # Test the scalar effect directly on a single transformer layer.
+        # The KV cache is computed *before* the scalar is applied, so RMSNorm
+        # in subsequent layers would cancel a scalar visible only in the cache.
+        # Testing the layer output directly avoids that cancellation.
+        layer = backbone.transformer_layers[0]
+
+        # Fixed input: (batch=1, seq=4, hidden_dim=8).
+        x = ops.ones((1, 4, backbone.hidden_dim), dtype="float32")
+
+        # Set encoder scalar ≠ decoder scalar.
+        layer.encoder_layer_scalar.assign(2.0)
+        layer.layer_scalar.assign(0.5)
+
+        # Encoder pass — must use encoder_layer_scalar (2.0).
+        out_enc, _ = layer(x, use_encoder_scalar=True)
+        # Decoder pass — must use layer_scalar (0.5).
+        out_dec, _ = layer(x, use_encoder_scalar=False)
+
+        # 2.0 ≠ 0.5, so the outputs must differ.
+        self.assertNotAllClose(
+            np.array(ops.stop_gradient(out_enc)),
+            np.array(ops.stop_gradient(out_dec)),
+            msg="encoder_layer_scalar had no effect on layer output",
+        )
+
+        # Symmetry: when both scalars are equal the outputs must match.
+        layer.encoder_layer_scalar.assign(0.5)
+        out_enc_equal, _ = layer(x, use_encoder_scalar=True)
+        self.assertAllClose(
+            np.array(ops.stop_gradient(out_enc_equal)),
+            np.array(ops.stop_gradient(out_dec)),
+            atol=1e-5,
+            msg=(
+                "Outputs should match when encoder and decoder scalars "
+                "are equal"
+            ),
+        )
+
+    def test_encoder_scalar_not_applied_in_decode_step(self):
+        """_decode_canvas_step always uses layer_scalar (decoder scalar)."""
+        import numpy as np
+        from keras import ops
+
+        backbone_kwargs = {
+            "vocabulary_size": self.tokenizer.vocabulary_size(),
+            "image_size": 16,
+            "num_layers": 2,
+            "num_query_heads": 2,
+            "num_key_value_heads": 1,
+            "hidden_dim": 8,
+            "intermediate_dim": 16,
+            "head_dim": 4,
+            "use_sliding_window_attention": True,
+            "sliding_window_size": 16,
+            "vision_encoder": None,
+            "has_encoder_layer_scalar": True,
+        }
+        backbone = Gemma4Backbone(**backbone_kwargs)
+        model = Gemma4BlockDiffusionLM(
+            backbone=backbone,
+            preprocessor=self.preprocessor,
+            canvas_length=self.preprocessor.canvas_length,
+        )
+        model.compile(sampler=self.sampler)
+
+        processed = self.preprocessor.generate_preprocess("the quick brown fox")
+        inputs = {
+            "token_ids": ops.expand_dims(processed["token_ids"], axis=0),
+            "padding_mask": ops.expand_dims(processed["padding_mask"], axis=0),
+        }
+        encoder_kv_cache, prompt_length = model._encode_prompt(inputs)
+        canvas_length = self.preprocessor.canvas_length
+        canvas = ops.zeros(
+            (1, canvas_length),
+            dtype="int32",
+        )
+        canvas_embeds = model._prepare_canvas_embeds(canvas, None)
+
+        # Run decode step with layer_scalar=1.0, encoder_layer_scalar=99.0
+        for layer in backbone.transformer_layers:
+            layer.layer_scalar.assign(1.0)
+            layer.encoder_layer_scalar.assign(99.0)
+        out_decoder_scalar = np.array(
+            ops.stop_gradient(
+                model._decode_canvas_step(
+                    canvas_embeds, encoder_kv_cache, prompt_length
+                )
+            )
+        )
+
+        # Now set encoder_layer_scalar=1.0 too — decode output should match.
+        for layer in backbone.transformer_layers:
+            layer.encoder_layer_scalar.assign(1.0)
+        out_same_scalar = np.array(
+            ops.stop_gradient(
+                model._decode_canvas_step(
+                    canvas_embeds, encoder_kv_cache, prompt_length
+                )
+            )
+        )
+
+        self.assertAllClose(
+            out_decoder_scalar,
+            out_same_scalar,
+            atol=1e-5,
+            msg="_decode_canvas_step was affected by encoder_layer_scalar",
+        )
+
     @pytest.mark.kaggle_key_required
     @pytest.mark.extra_large
     def test_all_presets(self):
