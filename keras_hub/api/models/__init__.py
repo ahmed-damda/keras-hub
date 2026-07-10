@@ -328,6 +328,12 @@ from keras_hub.src.models.gemma3.gemma3_causal_lm import (
 from keras_hub.src.models.gemma3.gemma3_causal_lm_preprocessor import (
     Gemma3CausalLMPreprocessor as Gemma3CausalLMPreprocessor,
 )
+from keras_hub.src.models.gemma3.gemma3_text_embedder import (
+    Gemma3TextEmbedder as Gemma3TextEmbedder,
+)
+from keras_hub.src.models.gemma3.gemma3_text_embedder_preprocessor import (
+    Gemma3TextEmbedderPreprocessor as Gemma3TextEmbedderPreprocessor,
+)
 from keras_hub.src.models.gemma3.gemma3_tokenizer import (
     Gemma3Tokenizer as Gemma3Tokenizer,
 )
@@ -621,6 +627,12 @@ from keras_hub.src.models.qwen3.qwen3_causal_lm import (
 from keras_hub.src.models.qwen3.qwen3_causal_lm_preprocessor import (
     Qwen3CausalLMPreprocessor as Qwen3CausalLMPreprocessor,
 )
+from keras_hub.src.models.qwen3.qwen3_text_embedder import (
+    Qwen3TextEmbedder as Qwen3TextEmbedder,
+)
+from keras_hub.src.models.qwen3.qwen3_text_embedder_preprocessor import (
+    Qwen3TextEmbedderPreprocessor as Qwen3TextEmbedderPreprocessor,
+)
 from keras_hub.src.models.qwen3.qwen3_tokenizer import (
     Qwen3Tokenizer as Qwen3Tokenizer,
 )
@@ -635,6 +647,24 @@ from keras_hub.src.models.qwen3_5.qwen3_5_causal_lm_preprocessor import (
 )
 from keras_hub.src.models.qwen3_5.qwen3_5_tokenizer import (
     Qwen3_5Tokenizer as Qwen3_5Tokenizer,
+)
+from keras_hub.src.models.qwen3_5_moe.qwen3_5_moe_backbone import (
+    Qwen3_5MoeBackbone as Qwen3_5MoeBackbone,
+)
+from keras_hub.src.models.qwen3_5_moe.qwen3_5_moe_causal_lm import (
+    Qwen3_5MoeCausalLM as Qwen3_5MoeCausalLM,
+)
+from keras_hub.src.models.qwen3_5_moe.qwen3_5_moe_causal_lm_preprocessor import (
+    Qwen3_5MoeCausalLMPreprocessor as Qwen3_5MoeCausalLMPreprocessor,
+)
+from keras_hub.src.models.qwen3_5_moe.qwen3_5_moe_image_converter import (
+    Qwen3_5MoeImageConverter as Qwen3_5MoeImageConverter,
+)
+from keras_hub.src.models.qwen3_5_moe.qwen3_5_moe_tokenizer import (
+    Qwen3_5MoeTokenizer as Qwen3_5MoeTokenizer,
+)
+from keras_hub.src.models.qwen3_5_moe.qwen3_5_moe_video_converter import (
+    Qwen3_5MoeVideoConverter as Qwen3_5MoeVideoConverter,
 )
 from keras_hub.src.models.qwen3_moe.qwen3_moe_backbone import (
     Qwen3MoeBackbone as Qwen3MoeBackbone,
@@ -930,6 +960,12 @@ from keras_hub.src.models.xlm_roberta.xlm_roberta_text_classifier_preprocessor i
 )
 from keras_hub.src.models.xlm_roberta.xlm_roberta_text_classifier_preprocessor import (
     XLMRobertaTextClassifierPreprocessor as XLMRobertaTextClassifierPreprocessor,
+)
+from keras_hub.src.models.xlm_roberta.xlm_roberta_text_embedder import (
+    XLMRobertaTextEmbedder as XLMRobertaTextEmbedder,
+)
+from keras_hub.src.models.xlm_roberta.xlm_roberta_text_embedder_preprocessor import (
+    XLMRobertaTextEmbedderPreprocessor as XLMRobertaTextEmbedderPreprocessor,
 )
 from keras_hub.src.models.xlm_roberta.xlm_roberta_tokenizer import (
     XLMRobertaTokenizer as XLMRobertaTokenizer,
