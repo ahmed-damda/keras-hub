@@ -225,10 +225,11 @@ def _kh_forward(
             )
     with torch.no_grad():
         hidden = backbone(inputs)
-    kh_logits = ops.convert_to_numpy(
-        backbone.token_embedding(hidden, reverse=True)
-    ).astype(np.float32)
-    return kh_logits
+    logits = backbone.token_embedding(hidden, reverse=True)
+    soft_cap = backbone.final_logit_soft_cap
+    if soft_cap is not None:
+        logits = ops.tanh(logits / soft_cap) * soft_cap
+    return ops.convert_to_numpy(logits).astype(np.float32)
 
 
 def _test_numerics(label, backbone, kh_logits, hf_logits):

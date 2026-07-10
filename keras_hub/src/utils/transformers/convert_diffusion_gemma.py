@@ -171,6 +171,9 @@ def convert_backbone_config(transformers_config):
         # DiffusionGemma encoder and decoder passes use separate per-layer
         # scalars (HF buffers are not tied across the two passes).
         "has_encoder_layer_scalar": True,
+        # Self-conditioning lives inside model.decoder in HF; mirror that by
+        # keeping it in the backbone rather than the task.
+        "has_diffusion_self_conditioning": True,
     }
 
 
@@ -291,43 +294,36 @@ def convert_weights(backbone, loader, transformers_config):
             hook_fn=lambda x, _: np.squeeze(x),
         )
 
+    if backbone.has_diffusion_self_conditioning:
+        sc = backbone.diffusion_self_conditioning
+        hf_sc_prefix = "model.decoder.self_conditioning"
+        loader.port_weight(
+            keras_variable=sc.pre_norm.scale,
+            hf_weight_key=f"{hf_sc_prefix}.pre_norm.weight",
+        )
+        loader.port_weight(
+            keras_variable=sc.gate_proj.kernel,
+            hf_weight_key=f"{hf_sc_prefix}.gate_proj.weight",
+            hook_fn=lambda x, _: np.transpose(x),
+        )
+        loader.port_weight(
+            keras_variable=sc.up_proj.kernel,
+            hf_weight_key=f"{hf_sc_prefix}.up_proj.weight",
+            hook_fn=lambda x, _: np.transpose(x),
+        )
+        loader.port_weight(
+            keras_variable=sc.down_proj.kernel,
+            hf_weight_key=f"{hf_sc_prefix}.down_proj.weight",
+            hook_fn=lambda x, _: np.transpose(x),
+        )
+        # post_norm has no learnable scale (Gemma4VNorm) — no weight to port.
+
     loader.port_weight(
         keras_variable=backbone.get_layer("final_normalization").scale,
         hf_weight_key=hf_key("norm.weight"),
     )
 
     return backbone
-
-
-def convert_head(task, loader, transformers_config):
-    """Port Gemma4BlockDiffusionSelfConditioning weights.
-
-    `self_conditioning` is a parameter of the task object, not the backbone,
-    so it cannot be ported in `convert_weights`.  The loader calls this
-    function with the full task instance after `convert_weights` completes.
-    """
-    sc = task.diffusion_self_conditioning
-    hf_prefix = "model.decoder.self_conditioning"
-    loader.port_weight(
-        keras_variable=sc.pre_norm.scale,
-        hf_weight_key=f"{hf_prefix}.pre_norm.weight",
-    )
-    loader.port_weight(
-        keras_variable=sc.gate_proj.kernel,
-        hf_weight_key=f"{hf_prefix}.gate_proj.weight",
-        hook_fn=lambda x, _: np.transpose(x),
-    )
-    loader.port_weight(
-        keras_variable=sc.up_proj.kernel,
-        hf_weight_key=f"{hf_prefix}.up_proj.weight",
-        hook_fn=lambda x, _: np.transpose(x),
-    )
-    loader.port_weight(
-        keras_variable=sc.down_proj.kernel,
-        hf_weight_key=f"{hf_prefix}.down_proj.weight",
-        hook_fn=lambda x, _: np.transpose(x),
-    )
-    # post_norm has no learnable scale (Gemma4VNorm) — no weight to port.
 
 
 def load_task_config(preset, transformers_config):

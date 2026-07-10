@@ -3,9 +3,6 @@ from keras import ops
 from keras_hub.src.api_export import keras_hub_export
 from keras_hub.src.models.block_diffusion_lm import BlockDiffusionLM
 from keras_hub.src.models.gemma4.gemma4_backbone import Gemma4Backbone
-from keras_hub.src.models.gemma4.gemma4_block_diffusion_lm_layers import (
-    Gemma4BlockDiffusionSelfConditioning,
-)
 from keras_hub.src.models.gemma4.gemma4_block_diffusion_lm_preprocessor import (
     Gemma4BlockDiffusionLMPreprocessor,
 )
@@ -39,16 +36,6 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
         self.backbone = backbone
         self.preprocessor = preprocessor
         super().__init__(**kwargs)
-        self.diffusion_self_conditioning = Gemma4BlockDiffusionSelfConditioning(
-            hidden_dim=backbone.hidden_dim,
-            intermediate_dim=backbone.intermediate_dim,
-            dtype=self.dtype_policy,
-            name="diffusion_self_conditioning",
-        )
-
-        self.diffusion_self_conditioning.build(
-            (None, None, backbone.hidden_dim)
-        )
 
     def _encode_prompt(self, inputs):
         token_ids = inputs["token_ids"]
@@ -195,7 +182,7 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
         )
         x = x * embed_scale
 
-        x = x + self.diffusion_self_conditioning(
+        x = self.backbone.diffusion_self_conditioning(
             x,
             prev_logits,
             self.backbone.token_embedding.embeddings,
