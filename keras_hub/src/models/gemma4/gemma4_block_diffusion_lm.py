@@ -13,15 +13,44 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
     """Gemma4-based discrete block-diffusion language model.
 
     Wraps a `Gemma4Backbone` with the block-diffusion generation loop from
-    `DiffusionLM`.  The backbone is called twice per generation iteration: once
-    as a causal encoder to freeze prompt KV caches, and up to
+    `BlockDiffusionLM`.  The backbone is called twice per generation iteration:
+    once as a causal encoder to freeze prompt KV caches, and up to
     `max_denoising_steps` times as a bidirectional decoder over a fixed-length
     canvas of tokens.
+
+    Supports both text-only and multimodal (image/video) prompts.  Vision
+    embeddings are pre-scaled by `1/sqrt(hidden_dim)` before interleaving so
+    that the global `embed_scale` factor does not distort them.
 
     Args:
         backbone: A `keras_hub.models.Gemma4Backbone` instance.
         preprocessor: A `keras_hub.models.Gemma4BlockDiffusionLMPreprocessor`
             or `None`.
+        canvas_length: int. Number of tokens in the denoising canvas.
+            Defaults to `256`.
+        max_denoising_steps: int. Maximum number of denoising iterations per
+            canvas block. Defaults to `48`.
+        t_min: float. Minimum sampling temperature applied at the last
+            denoising step. Defaults to `0.4`.
+        t_max: float. Maximum sampling temperature applied at the first
+            denoising step. Defaults to `0.8`.
+        **kwargs: Additional keyword arguments passed to the parent class.
+
+    Example:
+
+    >>> backbone = keras_hub.models.Gemma4Backbone.from_preset(
+    ...     "gemma4_2b_en"
+    ... )
+    >>> preprocessor = (
+    ...     keras_hub.models.Gemma4BlockDiffusionLMPreprocessor.from_preset(
+    ...         "gemma4_2b_en"
+    ...     )
+    ... )
+    >>> model = keras_hub.models.Gemma4BlockDiffusionLM(
+    ...     backbone=backbone,
+    ...     preprocessor=preprocessor,
+    ... )
+    >>> model.generate("The quick brown fox")
     """
 
     backbone_cls = Gemma4Backbone
@@ -41,7 +70,6 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
         token_ids = inputs["token_ids"]
         padding_mask = inputs.get("padding_mask", None)
 
-        # Multimodal vision inputs (images or video frames).
         pixel_values = inputs.get("pixel_values", None)
         pixel_position_ids = inputs.get("pixel_position_ids", None)
         vision_indices = inputs.get("vision_indices", None)
@@ -49,7 +77,7 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
 
         # Text embeddings — kept unscaled until after vision interleaving so
         # that pre-scaled vision embeddings land at the correct magnitude after
-        # the global x *= sqrt(hidden_dim) step below.
+        # the global `x = x * embed_scale` step below.
         x = self.backbone.token_embedding(token_ids)
         embed_scale = ops.cast(
             ops.sqrt(ops.cast(self.backbone.hidden_dim, "float32")), x.dtype
@@ -206,18 +234,20 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
         pad_len = canvas_length
         # Pad: (before, after) for each dimension — only pad axis 3.
         paddings = [
-            [0, 0],  # batch
-            [0, 0],  # layers
-            [0, 0],  # 2 (K/V)
-            [0, pad_len],  # sequence
-            [0, 0],  # heads
-            [0, 0],  # head_dim
+            [0, 0],
+            [0, 0],
+            [0, 0],
+            [0, pad_len],
+            [0, 0],
+            [0, 0],
         ]
         combined_cache = ops.pad(encoder_kv_cache, paddings)
 
         # canvas_mask marks every canvas position as bidirectional.
         canvas_mask = ops.ones((batch_size, canvas_length), dtype="bool")
 
+        # Per-layer token embeddings: canvas positions use token-id 0 (zero
+        # IDs) so they don't contribute spurious text-token embeddings.
         _hpl = self.backbone.hidden_size_per_layer_input
         if _hpl > 0:
             _per_emb = self.backbone.per_layer_token_embedding(
@@ -290,8 +320,7 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
                 ops.arange(ops.shape(token_ids)[1], dtype="int32"), axis=0
             ),
         }
-        # Pass vision fields when the backbone has a vision encoder so that
-        # the backbone's functional graph receives all required inputs.
+        # Pass vision fields to the backbone when a vision encoder is present.
         if not self.backbone.text_only_model:
             for key in (
                 "pixel_values",

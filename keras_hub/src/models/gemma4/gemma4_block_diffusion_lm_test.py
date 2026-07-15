@@ -41,6 +41,7 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
             "attention_logit_soft_cap": None,
             "final_logit_soft_cap": None,
             "vision_encoder": None,
+            "has_diffusion_self_conditioning": True,
         }
         self.backbone = Gemma4Backbone(**backbone_kwargs)
         self.init_kwargs = {
@@ -56,21 +57,18 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
         self.input_data = raw_preprocessed[0]
 
     def test_call_shape(self):
-        """call() returns logits with the correct shape."""
         model = Gemma4BlockDiffusionLM(**self.init_kwargs)
         logits = model(self.input_data)
         # (batch=2, seq_len=8, vocab_size)
         self.assertEqual(logits.shape, (2, 8, self.tokenizer.vocabulary_size()))
 
     def test_generate_single_string(self):
-        """generate() with a single string prompt returns a string."""
         model = Gemma4BlockDiffusionLM(**self.init_kwargs)
         model.compile(sampler=self.sampler)
         output = model.generate("the quick brown fox")
         self.assertIsInstance(output, str)
 
     def test_generate_batched_strings(self):
-        """generate() with a list of prompts returns a list of strings."""
         model = Gemma4BlockDiffusionLM(**self.init_kwargs)
         model.compile(sampler=self.sampler)
         outputs = model.generate(["the quick brown fox", "the quick brown fox"])
@@ -79,7 +77,6 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
             self.assertIsInstance(out, str)
 
     def test_generate_without_preprocessor(self):
-        """generate() with preprocessor=None returns raw int canvas."""
         model = Gemma4BlockDiffusionLM(
             backbone=self.backbone,
             preprocessor=None,
@@ -100,7 +97,6 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
         self.assertEqual(canvas.shape[-1], self.preprocessor.canvas_length)
 
     def test_generate_compilation_is_cached(self):
-        """generate_function is reused across generate() calls."""
         model = Gemma4BlockDiffusionLM(**self.init_kwargs)
         model.compile(sampler=self.sampler)
         model.generate("the quick brown fox")
@@ -110,7 +106,6 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
         self.assertEqual(first_fn, second_fn)
 
     def test_compile_resets_generate_function(self):
-        """compile() resets the cached generate_function."""
         model = Gemma4BlockDiffusionLM(**self.init_kwargs)
         model.compile(sampler=self.sampler)
         model.generate("the quick brown fox")
@@ -122,12 +117,10 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
         ("custom_canvas_length", {"canvas_length": 8}),
     )
     def test_serialization(self, extra_kwargs):
-        """get_config / from_config roundtrip preserves all parameters."""
         model = Gemma4BlockDiffusionLM(**self.init_kwargs, **extra_kwargs)
         self.run_serialization_test(model)
 
     def test_saved_model(self):
-        """Saving and loading weights preserves model outputs."""
         model = Gemma4BlockDiffusionLM(**self.init_kwargs)
         model_output = model(self.input_data)
 
@@ -250,6 +243,7 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
             "sliding_window_size": 16,
             "vision_encoder": None,
             "has_encoder_layer_scalar": True,
+            "has_diffusion_self_conditioning": True,
         }
         backbone = Gemma4Backbone(**backbone_kwargs)
         model = Gemma4BlockDiffusionLM(

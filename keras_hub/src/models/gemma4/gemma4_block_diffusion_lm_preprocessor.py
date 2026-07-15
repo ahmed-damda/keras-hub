@@ -998,6 +998,7 @@ class Gemma4BlockDiffusionLMPreprocessor(BlockDiffusionLMPreprocessor):
         token_ids, segment_ids = self.packer(
             (prompts_tok,),
             sequence_length=seq_len,
+            add_start_value=self.add_start_token,
             add_end_value=False,
         )
         padding_mask = token_ids != self.tokenizer.pad_token_id

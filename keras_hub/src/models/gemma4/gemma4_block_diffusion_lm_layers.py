@@ -112,10 +112,9 @@ class Gemma4BlockDiffusionSelfConditioning(keras.layers.Layer):
 
         Returns:
             Float tensor of shape `(B, canvas_length, hidden_dim)`.
-            When `prev_logits is None`, returns `canvas_embeds` unchanged.
         """
         if prev_logits is None:
-            return canvas_embeds
+            return self.post_norm(canvas_embeds)
 
         # Soft token embeddings: weighted combination of embedding rows.
         probs = ops.softmax(ops.cast(prev_logits, "float32"), axis=-1)
@@ -128,9 +127,8 @@ class Gemma4BlockDiffusionSelfConditioning(keras.layers.Layer):
         x = self.pre_norm(soft_embeds)
         gate = keras.activations.gelu(self.gate_proj(x), approximate=True)
         out = self.down_proj(gate * self.up_proj(x))
-        out = self.post_norm(out)
 
-        return canvas_embeds + out
+        return self.post_norm(canvas_embeds + out)
 
     def compute_output_shape(self, input_shape):
         return input_shape

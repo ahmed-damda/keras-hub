@@ -444,18 +444,6 @@ class Gemma4Backbone(Backbone):
             name="final_normalization",
         )
 
-        if has_diffusion_self_conditioning:
-            self.diffusion_self_conditioning = (
-                Gemma4BlockDiffusionSelfConditioning(
-                    hidden_dim=hidden_dim,
-                    intermediate_dim=intermediate_dim,
-                    epsilon=layer_norm_epsilon,
-                    dtype=dtype,
-                    name="diffusion_self_conditioning",
-                )
-            )
-            self.diffusion_self_conditioning.build((None, None, hidden_dim))
-
         # === Functional Model ===
 
         # Vision inputs.
@@ -737,6 +725,18 @@ class Gemma4Backbone(Backbone):
         self.num_experts_per_token = num_experts_per_token
         self.has_encoder_layer_scalar = has_encoder_layer_scalar
         self.has_diffusion_self_conditioning = has_diffusion_self_conditioning
+
+        if has_diffusion_self_conditioning:
+            self.diffusion_self_conditioning = (
+                Gemma4BlockDiffusionSelfConditioning(
+                    hidden_dim=hidden_dim,
+                    intermediate_dim=intermediate_dim,
+                    epsilon=layer_norm_epsilon,
+                    dtype=dtype,
+                    name="diffusion_self_conditioning",
+                )
+            )
+            self.diffusion_self_conditioning.build((None, None, hidden_dim))
 
         # Keep `num_vision_tokens_per_image` and `text_only_model` accessible.
         if vision_encoder is not None:
