@@ -199,10 +199,6 @@ def _hf_forward(
         )
         hf_inputs["input_ids"] = torch.cat([bos, hf_inputs["input_ids"]], dim=1)
         hf_inputs["attention_mask"] = torch.ones_like(hf_inputs["input_ids"])
-        if "image_position_ids" in hf_inputs:
-            hf_inputs["image_position_ids"] = (
-                hf_inputs["image_position_ids"] + 1
-            )
         if "mm_token_type_ids" in hf_inputs:
             mm_pad = torch.zeros(
                 (hf_inputs["mm_token_type_ids"].shape[0], 1),
@@ -559,6 +555,11 @@ def main(_):
     )
     print("✓ All weights loaded")
 
+    _verify(diffusion_lm, hf_data, hf_preset)
+
+    del hf_data
+    gc.collect()
+
     if FLAGS.save_dtype == "bfloat16":
         del diffusion_lm
         gc.collect()
@@ -567,9 +568,6 @@ def main(_):
         _save_preset(
             hf_preset, preset_name, FLAGS.save_dtype, diffusion_lm=diffusion_lm
         )
-    _verify(diffusion_lm, hf_data, hf_preset)
-    del hf_data
-    gc.collect()
 
 
 if __name__ == "__main__":

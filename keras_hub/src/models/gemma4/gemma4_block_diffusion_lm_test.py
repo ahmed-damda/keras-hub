@@ -3,6 +3,7 @@ import os
 import numpy as np
 import pytest
 from absl.testing import parameterized
+from keras import ops
 
 from keras_hub.src.models.gemma4.gemma4_backbone import Gemma4Backbone
 from keras_hub.src.models.gemma4.gemma4_block_diffusion_lm import (
@@ -50,17 +51,40 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
         }
         self.sampler = EntropyBoundSampler(vocabulary_size=vocab_size)
 
-        # Pre-processed training inputs for call() tests.
-        raw_preprocessed = self.preprocessor(
-            ["the quick brown fox", "the quick brown fox"]
+        self.train_data = (
+            {
+                "prompts": ["the quick brown fox", "the quick brown fox"],
+                "responses": ["the earth is round", "the earth is round"],
+            },
         )
-        self.input_data = raw_preprocessed[0]
+        self.input_data = self.preprocessor(*self.train_data)[0]
 
     def test_call_shape(self):
         model = Gemma4BlockDiffusionLM(**self.init_kwargs)
         logits = model(self.input_data)
         # (batch=2, seq_len=8, vocab_size)
         self.assertEqual(logits.shape, (2, 8, self.tokenizer.vocabulary_size()))
+
+    def test_task_basics(self):
+        # run_task_test relies on task._inputs_struct, which Keras sets at
+        # construction only for functional models. Gemma4BlockDiffusionLM
+        # defines its own call(), making it a subclassed model where
+        # _inputs_struct is absent until after the first forward pass.
+        # Replicate the key fit/predict/serialization checks manually.
+        task = Gemma4BlockDiffusionLM(**self.init_kwargs)
+        self.run_serialization_test(task)
+
+        # Pass raw prompts/responses — Task.preprocess_samples routes through
+        # the preprocessor automatically, so pre-processed data would cause a
+        # double-preprocessing KeyError.
+        raw_x = self.train_data[0]
+
+        # Predict through task + preprocessor pipeline; verify output shape.
+        output = task.predict(raw_x)
+        self.assertEqual(output.shape, (2, 8, self.tokenizer.vocabulary_size()))
+
+        # Fit through task + preprocessor pipeline for one epoch.
+        task.fit(raw_x, epochs=1)
 
     def test_generate_single_string(self):
         model = Gemma4BlockDiffusionLM(**self.init_kwargs)
@@ -85,8 +109,6 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
         model.compile(sampler=self.sampler)
         processed = self.preprocessor.generate_preprocess("the quick brown fox")
         # Add batch dimension.
-        from keras import ops
-
         inputs = {
             "token_ids": ops.expand_dims(processed["token_ids"], axis=0),
             "padding_mask": ops.expand_dims(processed["padding_mask"], axis=0),
@@ -132,6 +154,11 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
         _ = restored_model(self.input_data)
         restored_model.load_weights(path)
 
+        # Verify weight count matches.
+        self.assertEqual(len(model.weights), len(restored_model.weights))
+        for w1, w2 in zip(model.get_weights(), restored_model.get_weights()):
+            self.assertAllClose(w1, w2, atol=1e-5, rtol=1e-5)
+
         # Verify outputs match after weight restore.
         restored_output = restored_model(self.input_data)
         self.assertAllClose(model_output, restored_output, atol=1e-5, rtol=1e-5)
@@ -168,9 +195,6 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
     def test_encoder_and_decoder_scalars_are_independent(self):
         """encoder_layer_scalar and layer_scalar independently scale
         layer outputs."""
-        import numpy as np
-        from keras import ops
-
         backbone_kwargs = {
             "vocabulary_size": self.tokenizer.vocabulary_size(),
             "image_size": 16,
@@ -227,9 +251,6 @@ class Gemma4BlockDiffusionLMTest(TestCase, parameterized.TestCase):
 
     def test_encoder_scalar_not_applied_in_decode_step(self):
         """_decode_canvas_step always uses layer_scalar (decoder scalar)."""
-        import numpy as np
-        from keras import ops
-
         backbone_kwargs = {
             "vocabulary_size": self.tokenizer.vocabulary_size(),
             "image_size": 16,

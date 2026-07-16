@@ -114,36 +114,9 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
         else:
             vision_mask = None
 
-        # Per-layer token embeddings: zero out vision positions so they don't
-        # contribute a spurious text-token embedding at those positions.
-        _hpl = self.backbone.hidden_size_per_layer_input
-        if _hpl > 0:
-            _per_layer_ids = token_ids
-            if vision_mask is not None:
-                _per_layer_ids = ops.where(
-                    vision_mask,
-                    ops.zeros_like(_per_layer_ids),
-                    _per_layer_ids,
-                )
-            _per_emb = self.backbone.per_layer_token_embedding(_per_layer_ids)
-            _per_emb = ops.cast(_per_emb, x.dtype)
-            _per_emb = _per_emb * ops.cast(float(_hpl) ** 0.5, _per_emb.dtype)
-            per_layer_emb_flat = _per_emb
-        else:
-            per_layer_emb_flat = None
-
         # Global scale applied after interleaving: text positions get
         # sqrt(hidden_dim), vision positions keep their pre-scaled magnitude.
         x = x * embed_scale
-
-        if _hpl > 0:
-            _per_proj = self.backbone.per_layer_model_projection(x)
-            _per_proj = _per_proj * ops.cast(
-                float(self.backbone.hidden_dim) ** -0.5, _per_proj.dtype
-            )
-            per_layer_proj_flat = _per_proj
-        else:
-            per_layer_proj_flat = None
 
         batch_size = ops.shape(token_ids)[0]
         prompt_length = ops.shape(token_ids)[1]
@@ -164,6 +137,8 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
         ]
         cache = ops.zeros(cache_shape, dtype=self.compute_dtype)
 
+        # The HF encoder does not inject per-layer embeddings — it is a plain
+        # residual transformer loop (see `DiffusionGemmaEncoderTextLayer`).
         caches = []
         for i, layer in enumerate(self.backbone.transformer_layers):
             current_cache = cache[:, i, ...]
@@ -178,16 +153,6 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
                 else:
                     shared_kv = cache[:, idx, ...]
 
-            if per_layer_proj_flat is not None:
-                proj_i = per_layer_proj_flat[:, :, i * _hpl : (i + 1) * _hpl]
-                emb_i = per_layer_emb_flat[:, :, i * _hpl : (i + 1) * _hpl]
-                proj_i_normed = self.backbone.per_layer_projection_norm(proj_i)
-                per_layer_input_i = (proj_i_normed + emb_i) * ops.cast(
-                    2.0**-0.5, proj_i.dtype
-                )
-            else:
-                per_layer_input_i = None
-
             x, next_cache = layer(
                 x,
                 cache=current_cache,
@@ -195,7 +160,6 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
                 padding_mask=padding_mask,
                 vision_mask=vision_mask,
                 shared_kv=shared_kv,
-                per_layer_input=per_layer_input_i,
                 use_encoder_scalar=True,
             )
             caches.append(next_cache)
@@ -246,26 +210,8 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
         # canvas_mask marks every canvas position as bidirectional.
         canvas_mask = ops.ones((batch_size, canvas_length), dtype="bool")
 
-        # Per-layer token embeddings: canvas positions use token-id 0 (zero
-        # IDs) so they don't contribute spurious text-token embeddings.
-        _hpl = self.backbone.hidden_size_per_layer_input
-        if _hpl > 0:
-            _per_emb = self.backbone.per_layer_token_embedding(
-                ops.zeros((batch_size, canvas_length), dtype="int32")
-            )
-            _per_emb = ops.cast(_per_emb, x.dtype)
-            _per_emb = _per_emb * ops.cast(float(_hpl) ** 0.5, _per_emb.dtype)
-            per_layer_emb_flat = _per_emb
-
-            _per_proj = self.backbone.per_layer_model_projection(x)
-            _per_proj = _per_proj * ops.cast(
-                float(self.backbone.hidden_dim) ** -0.5, _per_proj.dtype
-            )
-            per_layer_proj_flat = _per_proj
-        else:
-            per_layer_emb_flat = None
-            per_layer_proj_flat = None
-
+        # The HF decoder does not inject per-layer embeddings during the canvas
+        # pass — it is a plain residual transformer loop.
         caches = []
         for i, layer in enumerate(self.backbone.transformer_layers):
             current_cache = combined_cache[:, i, ...]
@@ -280,23 +226,12 @@ class Gemma4BlockDiffusionLM(BlockDiffusionLM):
                 else:
                     shared_kv = combined_cache[:, idx, ...]
 
-            if per_layer_proj_flat is not None:
-                proj_i = per_layer_proj_flat[:, :, i * _hpl : (i + 1) * _hpl]
-                emb_i = per_layer_emb_flat[:, :, i * _hpl : (i + 1) * _hpl]
-                proj_i_normed = self.backbone.per_layer_projection_norm(proj_i)
-                per_layer_input_i = (proj_i_normed + emb_i) * ops.cast(
-                    2.0**-0.5, proj_i.dtype
-                )
-            else:
-                per_layer_input_i = None
-
             x, next_cache = layer(
                 x,
                 cache=current_cache,
                 cache_update_index=prompt_length,
                 canvas_mask=canvas_mask,
                 shared_kv=shared_kv,
-                per_layer_input=per_layer_input_i,
             )
             caches.append(next_cache)
 

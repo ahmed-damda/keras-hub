@@ -226,3 +226,47 @@ class EntropyBoundSamplerTest(TestCase):
         )
         self.assertEqual(restored.vocabulary_size, self.sampler.vocabulary_size)
         self.assertEqual(restored.seed, self.sampler.seed)
+
+    def test_stability_threshold_respected(self):
+        # stability_threshold=2 requires two consecutive stable steps before
+        # stopping is allowed.
+        sampler = EntropyBoundSampler(
+            entropy_bound=1.0,
+            confidence_threshold=1.0,
+            stability_threshold=2,
+            vocabulary_size=self.vocab_size,
+            seed=0,
+        )
+        token_ids = np.zeros(
+            (self.batch_size, self.canvas_length), dtype="int32"
+        )
+        canvas = ops.array(token_ids)
+        logits = self._make_peaked_logits(token_ids)
+
+        _, stop0 = sampler(canvas, logits, step=0)
+        _, stop1 = sampler(canvas, logits, step=1)  # 1st stable step
+        _, stop2 = sampler(canvas, logits, step=2)  # 2nd stable step
+
+        self.assertFalse(stop0)
+        self.assertFalse(stop1)  # only 1 stable step, threshold=2 not met
+        self.assertTrue(stop2)  # 2 stable steps, threshold met
+
+    def test_reproducibility(self):
+        # Two samplers with the same seed must produce identical outputs.
+        sampler_a = EntropyBoundSampler(
+            entropy_bound=0.5,
+            vocabulary_size=self.vocab_size,
+            seed=7,
+        )
+        sampler_b = EntropyBoundSampler(
+            entropy_bound=0.5,
+            vocabulary_size=self.vocab_size,
+            seed=7,
+        )
+        canvas = ops.zeros((self.batch_size, self.canvas_length), dtype="int32")
+        logits = self._make_uniform_logits()
+
+        canvas_a, _ = sampler_a(canvas, logits, step=0)
+        canvas_b, _ = sampler_b(canvas, logits, step=0)
+
+        self.assertAllEqual(canvas_a, canvas_b)

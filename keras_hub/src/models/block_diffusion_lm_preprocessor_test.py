@@ -15,11 +15,12 @@ class TestBlockDiffusionLMPreprocessor(TestCase):
         self.tokenizer = MockGemma4Tokenizer()
         self.sequence_length = 8
         self.canvas_length = 4
-        self.preprocessor = BlockDiffusionLMPreprocessor(
-            tokenizer=self.tokenizer,
-            sequence_length=self.sequence_length,
-            canvas_length=self.canvas_length,
-        )
+        self.init_kwargs = {
+            "tokenizer": self.tokenizer,
+            "sequence_length": self.sequence_length,
+            "canvas_length": self.canvas_length,
+        }
+        self.preprocessor = BlockDiffusionLMPreprocessor(**self.init_kwargs)
 
     def test_preset_accessors(self):
         subclass_presets = set(
@@ -86,7 +87,8 @@ class TestBlockDiffusionLMPreprocessor(TestCase):
         output = self.preprocessor.generate_preprocess("the quick brown fox")
         token_ids = np.array(output["token_ids"])
         canvas_slice = token_ids[..., self.sequence_length :]
-        self.assertAllEqual(canvas_slice, np.zeros_like(canvas_slice))
+        pad_id = self.tokenizer.pad_token_id
+        self.assertAllEqual(canvas_slice, np.full_like(canvas_slice, pad_id))
 
     def test_generate_preprocess_canvas_mask_all_false(self):
         output = self.preprocessor.generate_preprocess("the quick brown fox")
@@ -112,6 +114,37 @@ class TestBlockDiffusionLMPreprocessor(TestCase):
 
     def test_serialization(self):
         self.run_serialization_test(self.preprocessor)
+
+    def test_preprocessing_layer(self):
+        self.run_preprocessing_layer_test(
+            cls=BlockDiffusionLMPreprocessor,
+            init_kwargs=self.init_kwargs,
+            input_data=["the quick brown fox", "the quick brown fox"],
+        )
+
+    def test_call_sample_weight_values(self):
+        _, _, sw = self.preprocessor(["the quick brown fox"])
+        # sw=1 at every real label position, 0 at pad positions.
+        # Packed (seq+1=9): [1,9,14,10,12,2,0,0,0] -> padding_mask[1:]:
+        # [1,1,1,1,1,0,0,0]
+        self.assertAllEqual(sw[0], [1, 1, 1, 1, 1, 0, 0, 0])
+
+    def test_generate_preprocess_batched(self):
+        output = self.preprocessor.generate_preprocess(
+            ["the quick brown fox", "the quick brown fox"]
+        )
+        expected_length = self.sequence_length + self.canvas_length
+        self.assertEqual(output["token_ids"].shape[0], 2)
+        self.assertEqual(output["token_ids"].shape[1], expected_length)
+
+    def test_call_truncates_long_input(self):
+        # Input that tokenizes to more tokens than sequence_length must be
+        # truncated to exactly sequence_length in the output.
+        long_input = "the quick brown fox the earth is round" * 4
+        x, y, sw = self.preprocessor([long_input, long_input])
+        self.assertEqual(x["token_ids"].shape, (2, self.sequence_length))
+        self.assertEqual(y.shape, (2, self.sequence_length))
+        self.assertEqual(sw.shape, (2, self.sequence_length))
 
     def test_config_contains_canvas_length(self):
         config = self.preprocessor.get_config()

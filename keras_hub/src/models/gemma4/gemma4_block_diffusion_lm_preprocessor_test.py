@@ -30,9 +30,19 @@ class Gemma4BlockDiffusionLMPreprocessorTest(TestCase):
             return_output=True,
         )
         x, y, sw = output
+        # Verify shapes.
         self.assertEqual(x["token_ids"].shape[-1], 8)
         self.assertEqual(x["padding_mask"].shape[-1], 8)
         self.assertEqual(y.shape[-1], 8)
+        self.assertEqual(sw.shape[-1], 8)
+        # Verify token values for the first sample.
+        # Vocab: 1=<bos>, 9=the, 14=quick, 10=brown, 12=fox, 2=<eos>, 0=<pad>
+        self.assertAllEqual(x["token_ids"][0], [1, 9, 14, 10, 12, 2, 0, 0])
+        self.assertAllEqual(x["padding_mask"][0], [1, 1, 1, 1, 1, 1, 0, 0])
+        # y is token_ids shifted left by one.
+        self.assertAllEqual(y[0], [9, 14, 10, 12, 2, 0, 0, 0])
+        # sw is 1 for non-pad label positions.
+        self.assertAllEqual(sw[0], [1, 1, 1, 1, 1, 0, 0, 0])
 
     def test_no_start_end_token(self):
         preprocessor = Gemma4BlockDiffusionLMPreprocessor(
@@ -64,16 +74,22 @@ class Gemma4BlockDiffusionLMPreprocessorTest(TestCase):
         output = self.preprocessor.generate_preprocess(
             {"prompts": ["the quick brown fox", "the quick brown fox"]}
         )
+        expected_length = (
+            self.preprocessor.sequence_length + self.preprocessor.canvas_length
+        )
         self.assertEqual(output["token_ids"].shape[0], 2)
+        self.assertEqual(output["token_ids"].shape[1], expected_length)
 
     def test_generate_postprocess(self):
-        canvas = np.array([9, 14, 10, 12, 0, 0, 0, 0], dtype="int32")
+        # canvas_length=4; vocab: 9=the, 14=quick, 10=brown, 12=fox
+        canvas = np.array([9, 14, 10, 12], dtype="int32")
         result = self.preprocessor.generate_postprocess(canvas)
         self.assertAllEqual(result, "the quick brown fox")
 
     def test_generate_postprocess_batched(self):
+        # canvas_length=4; each row is one generated canvas.
         canvas = np.array(
-            [[9, 14, 10, 12, 0, 0, 0, 0], [9, 14, 10, 12, 0, 0, 0, 0]],
+            [[9, 14, 10, 12], [9, 14, 10, 12]],
             dtype="int32",
         )
         results = self.preprocessor.generate_postprocess(canvas)
@@ -85,6 +101,10 @@ class Gemma4BlockDiffusionLMPreprocessorTest(TestCase):
     def test_sequence_length_setter(self):
         self.preprocessor.sequence_length = 16
         self.assertEqual(self.preprocessor.sequence_length, 16)
+        # A subsequent call must produce outputs matching the new length.
+        x, y, sw = self.preprocessor(["the quick brown fox"])
+        self.assertEqual(x["token_ids"].shape[-1], 16)
+        self.assertEqual(y.shape[-1], 16)
 
     @pytest.mark.kaggle_key_required
     @pytest.mark.extra_large

@@ -21,7 +21,7 @@ class Gemma4BlockDiffusionSelfConditioning(keras.layers.Layer):
         x           = pre_norm(soft_embeds)
         gate        = gelu(gate_proj(x), approximate=True)
         out         = down_proj(gate * up_proj(x))
-        return post_norm(out)
+        return post_norm(canvas_embeds + out)
 
     `pre_norm` has a learnable scale (standard RMSNorm).
     `post_norm` has NO learnable scale (pure L2 normalisation via
